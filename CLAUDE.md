@@ -20,6 +20,8 @@ Always order imports in this sequence, with groups separated by a single blank l
 3. Third-party imports (if any)
 4. Internal darkdraw imports (from darkdraw import ...)
 
+**Never use wildcard imports from external libraries** (like `from visidata import *`). Always use explicit imports to make dependencies clear.
+
 ## Parameter Naming Conventions
 
 Drawing and DrawingSheet are conceptually distinct:
@@ -43,6 +45,22 @@ This distinction makes the conceptual difference clear in code.
 - See DESIGN.md for architecture overview
 - See CONTRIBUTING.md for development workflow
 
+## VisiData Method Decorators
+
+VisiData provides decorators for extending class functionality:
+- **`@ClassName.api`**: Add a new method to the class
+- **`@ClassName.before`**: Run code *before* an existing method (in addition to it)
+- **`@ClassName.after`**: Run code *after* an existing method (in addition to it)
+
+Use `@before`/`@after` to extend methods across modules without duplicating logic. Example:
+```python
+# In animation.py, extend Drawing.checkCursor with frame bounds checking
+@Drawing.before
+def checkCursor(dwg):
+    dwg.cursorFrameIndex = max(min(dwg.cursorFrameIndex, len(dwg.frames)-1), 0)
+    # Then the original checkCursor from drawing.py runs
+```
+
 ## Refactoring Pattern
 
 When extracting functionality from drawing.py into a separate module, include all of:
@@ -53,6 +71,8 @@ When extracting functionality from drawing.py into a separate module, include al
 - Sheet initialization (`Drawing.init()`, etc.) for variables only those functions use
 - Menu items (`vd.addMenuItems()`) for those commands
 - Keep all related functionality together in the same file
+
+When extending existing methods across modules, use `@ClassName.before` or `@ClassName.after` instead of replacing the entire method.
 
 After extraction, **always check the source file (drawing.py) for imports that are now unused** and remove them.
 
