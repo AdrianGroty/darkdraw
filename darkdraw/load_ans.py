@@ -12,7 +12,12 @@ vd.option('ans_encoding', 'cp437', 'character encoding: cp437/dos, iso8859-1/ami
 @VisiData.api
 def open_ans(vd, p):
     # 1. Read raw bytes from source
+    from .ans2ddw import parse_sauce
+    
     data = p.read_bytes()
+    
+    # 1a. Extract SAUCE record if present
+    file_data, sauce = parse_sauce(data)
 
     # 2. Pull current global options
     enc_input = vd.options.ans_encoding.lower()
@@ -36,10 +41,13 @@ def open_ans(vd, p):
     )
     
     # 5. Parse the data into AnsiChar objects
-    chars = parser.parse(data)
+    chars = parser.parse(file_data)
 
-    # 6. Convert to rows using the AnsiChar transformation logic
-    rows = [char.to_ddw_row() for char in chars]
+    # 6. Convert to rows, including SAUCE if present
+    rows = []
+    if sauce:
+        rows.extend(sauce.to_ddw_rows())
+    rows.extend([char.to_ddw_row() for char in chars])
 
     # 7. Generate JSONL output for DrawingSheet
     ddwoutput = '\n'.join(json.dumps(r) for r in rows) + '\n'
