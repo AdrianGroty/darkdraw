@@ -149,9 +149,9 @@ class SauceRecord:
         
         return [
             {
-                "type": "", "x": 0, "y": y, "text": text,
+                "type": label, "x": 0, "y": y, "text": text,
                 "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": label, "rows": []
+                "frame": "SAUCE record", "id": "", "rows": []
             }
             for y, (text, label) in enumerate((text, label) for text, label in fields if text)
         ]
