@@ -5,6 +5,7 @@ import sys
 import json
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
+from functools import lru_cache
 
 # Control characters
 LF = 10
@@ -84,6 +85,7 @@ def iso8859_1_to_utf8(byte_val: int) -> str:
     """Convert ISO-8859-1 byte value to UTF-8 character."""
     return chr(byte_val)
 
+@lru_cache(maxsize=4096)
 def rgb_to_256color(rgb: int) -> int:
     """Convert 24-bit RGB to nearest xterm 256 color code."""
     r = (rgb >> 16) & 0xFF
@@ -119,85 +121,12 @@ class SauceRecord:
     t_flags: int = 0
     t_info_s: str = ""
     
-    def to_ddw_rows(self) -> List[dict]:
-        """Convert SAUCE record to DarkDraw text rows."""
-        rows = []
-        y = 0
-        
-        if self.title:
-            rows.append({
-                "type": "", "x": 0, "y": y, "text": self.title,
-                "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": "Title", "rows": []
-            })
-            y += 1
-        
-        if self.author:
-            rows.append({
-                "type": "", "x": 0, "y": y, "text": self.author,
-                "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": "Author", "rows": []
-            })
-            y += 1
-        
-        if self.group:
-            rows.append({
-                "type": "", "x": 0, "y": y, "text": self.group,
-                "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": "Group", "rows": []
-            })
-            y += 1
-        
-        if self.date:
-            rows.append({
-                "type": "", "x": 0, "y": y, "text": self.date,
-                "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": "Date", "rows": []
-            })
-            y += 1
-        
-        if self.t_info1 or self.t_info2:
-            rows.append({
-                "type": "", "x": 0, "y": y, "text": f"{self.t_info1}x{self.t_info2}",
-                "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": "Dimensions", "rows": []
-            })
-            y += 1
-        
-        if self.t_flags:
-            flags = []
-            if self.t_flags & 0x01:
-                flags.append("non-blink")
-            if self.t_flags & 0x02:
-                flags.append("letter-spacing")
-            if self.t_flags & 0x04:
-                flags.append("aspect-ratio")
-            
-            rows.append({
-                "type": "", "x": 0, "y": y,
-                "text": ", ".join(flags) if flags else str(self.t_flags),
-                "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": "Flags", "rows": []
-            })
-            y += 1
-        
-        if self.t_info_s:
-            rows.append({
-                "type": "", "x": 0, "y": y, "text": self.t_info_s,
-                "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": "Font", "rows": []
-            })
-            y += 1
-        
-        for i, comment in enumerate(self.comments):
-            rows.append({
-                "type": "", "x": 0, "y": y, "text": comment,
-                "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": f"Comment {i+1}", "rows": []
-            })
-            y += 1
-        
-        return rows
+def sauce_to_row(self, y: int, text: str, label: str) -> dict:
+    return {
+        "type": "", "x": 0, "y": y, "text": text,
+        "color": "", "tags": [], "group": "",
+        "frame": "SAUCE record", "id": label, "rows": []
+    }
 
 @dataclass
 class AnsiChar:
@@ -217,37 +146,20 @@ class AnsiChar:
     dim: bool = False
     
     def to_ddw_row(self, frame_id: Optional[str] = None) -> dict:
-        """Convert to DarkDraw row format."""
-        color_parts = []
+        fg = str(rgb_to_256color(self.foreground24)) if self.foreground24 else str(self.foreground)
+        bg = f"on {rgb_to_256color(self.background24)}" if self.background24 else f"on {self.background}"
         
-        if self.foreground24:
-            fg_256 = rgb_to_256color(self.foreground24)
-            color_parts.append(str(fg_256))
-        else:
-            color_parts.append(str(self.foreground))
-        
-        if self.background24:
-            bg_256 = rgb_to_256color(self.background24)
-            color_parts.append(f"on {bg_256}")
-        else:
-            color_parts.append(f"on {self.background}")
-        
-        if self.bold:
-            color_parts.append("bold")
-        if self.italic:
-            color_parts.append("italic")
-        if self.underline:
-            color_parts.append("underline")
-        if self.blink:
-            color_parts.append("blink")
-        if self.reverse:
-            color_parts.append("reverse")
-        if self.dim:
-            color_parts.append("dim")
+        attrs = [fg, bg]
+        if self.bold: attrs.append("bold")
+        if self.italic: attrs.append("italic")
+        if self.underline: attrs.append("underline")
+        if self.blink: attrs.append("blink")
+        if self.reverse: attrs.append("reverse")
+        if self.dim: attrs.append("dim")
         
         return {
             "type": "", "x": self.column, "y": self.row,
-            "text": self.character, "color": " ".join(color_parts) if color_parts else "",
+            "text": self.character, "color": " ".join(attrs),
             "tags": [], "group": "", "frame": frame_id or "", "id": "", "rows": []
         }
 
@@ -285,6 +197,15 @@ class AnsiParser:
         state = STATE_TEXT
         i = 0
         length = len(data)
+        
+        # For UTF-8, decode once upfront
+        if self.encoding == 'utf-8':
+            try:
+                text = data.decode('utf-8', errors='replace')
+                return self._parse_unicode(text)
+            except Exception:
+                # Fallback if decode fails entirely
+                pass
         
         while i < length:
             cursor = data[i]
@@ -452,6 +373,24 @@ class AnsiParser:
         if not params:
             params = ['0']
         
+        # Lookup tables for simple attribute toggles
+        ATTR_ON = {
+            1: ('bold', True),
+            2: ('dim', True),
+            3: ('italic', True),
+            4: ('underline', True),
+            5: ('blink', True),
+            7: ('invert', True),
+        }
+        
+        ATTR_OFF = {
+            22: ['bold', 'dim'],
+            23: ['italic'],
+            24: ['underline'],
+            25: ['blink'],
+            27: ['invert'],
+        }
+        
         i = 0
         while i < len(params):
             try:
@@ -460,94 +399,105 @@ class AnsiParser:
                 i += 1
                 continue
             
+            # Reset all
             if val == 0:
                 self.background = 0
                 self.background24 = 0
                 self.foreground = 7
                 self.foreground24 = 0
-                self.bold = False
-                self.blink = False
-                self.invert = False
-                self.italic = False
-                self.underline = False
-                self.dim = False
-            elif val == 1:
-                self.bold = True
-                self.foreground = (self.foreground % 8) + 8
-                self.foreground24 = 0
-            elif val == 2:
-                self.dim = True
-            elif val == 3:
-                self.italic = True
-            elif val == 4:
-                self.underline = True
-            elif val == 5:
-                if self.icecolors:
+                self.bold = self.blink = self.invert = False
+                self.italic = self.underline = self.dim = False
+            
+            # Simple attribute toggles
+            elif val in ATTR_ON:
+                attr, value = ATTR_ON[val]
+                setattr(self, attr, value)
+                if val == 1:  # bold also brightens foreground
+                    self.foreground = (self.foreground % 8) + 8
+                    self.foreground24 = 0
+                elif val == 5 and self.icecolors:  # blink in ice mode
                     self.background = (self.background % 8) + 8
                     self.blink = False
-                else:
-                    self.blink = True
-            elif val == 7:
-                self.invert = True
-            elif val == 22:
-                self.bold = False
-                self.dim = False
-                if self.foreground >= 8:
+            
+            # Attribute off
+            elif val in ATTR_OFF:
+                for attr in ATTR_OFF[val]:
+                    setattr(self, attr, False)
+                if val == 22 and self.foreground >= 8:
                     self.foreground -= 8
-            elif val == 23:
-                self.italic = False
-            elif val == 24:
-                self.underline = False
-            elif val == 25:
-                self.blink = False
-                if self.icecolors and self.background >= 8:
+                elif val == 25 and self.icecolors and self.background >= 8:
                     self.background -= 8
-            elif val == 27:
-                self.invert = False
+            
+            # Foreground colors (30-37, 90-97)
             elif 30 <= val <= 37:
-                self.foreground = val - 30
+                self.foreground = val - 30 + (8 if self.bold else 0)
                 self.foreground24 = 0
-                if self.bold:
-                    self.foreground += 8
-            elif val == 38:
-                if i + 2 < len(params):
-                    mode = int(params[i + 1])
-                    if mode == 5:
-                        self.foreground = int(params[i + 2]) & 0xFF
-                        self.foreground24 = 0
-                        i += 2
-                    elif mode == 2 and i + 4 < len(params):
-                        r = int(params[i + 2]) & 0xFF
-                        g = int(params[i + 3]) & 0xFF
-                        b = int(params[i + 4]) & 0xFF
-                        self.foreground24 = (r << 16) | (g << 8) | b
-                        i += 4
-            elif 40 <= val <= 47:
-                self.background = val - 40
-                self.background24 = 0
-                if self.blink and self.icecolors:
-                    self.background += 8
-            elif val == 48:
-                if i + 2 < len(params):
-                    mode = int(params[i + 1])
-                    if mode == 5:
-                        self.background = int(params[i + 2]) & 0xFF
-                        self.background24 = 0
-                        i += 2
-                    elif mode == 2 and i + 4 < len(params):
-                        r = int(params[i + 2]) & 0xFF
-                        g = int(params[i + 3]) & 0xFF
-                        b = int(params[i + 4]) & 0xFF
-                        self.background24 = (r << 16) | (g << 8) | b
-                        i += 4
             elif 90 <= val <= 97:
-                self.foreground = val - 90 + 8
+                self.foreground = val - 82  # 90 - 8 = 82
                 self.foreground24 = 0
+            
+            # Background colors (40-47, 100-107)
+            elif 40 <= val <= 47:
+                self.background = val - 40 + (8 if self.blink and self.icecolors else 0)
+                self.background24 = 0
             elif 100 <= val <= 107:
-                self.background = val - 100 + 8
+                self.background = val - 92  # 100 - 8 = 92
                 self.background24 = 0
             
+            # 256-color / 24-bit color
+            elif val == 38:  # foreground
+                consumed = self._handle_extended_color(params[i:], is_foreground=True)
+                i += consumed
+            elif val == 48:  # background
+                consumed = self._handle_extended_color(params[i:], is_foreground=False)
+                i += consumed
+            
             i += 1
+    
+    def _handle_extended_color(self, params: list, is_foreground: bool) -> int:
+        """Handle 38/48 extended color sequences. Returns number of params consumed."""
+        if len(params) < 3:
+            return 0
+        
+        try:
+            mode = int(params[1])
+            
+            # 256-color mode
+            if mode == 5:
+                color = int(params[2]) & 0xFF
+                if is_foreground:
+                    self.foreground = color
+                    self.foreground24 = 0
+                else:
+                    self.background = color
+                    self.background24 = 0
+                return 2
+            
+            # 24-bit RGB mode
+            elif mode == 2 and len(params) >= 5:
+                r = int(params[2]) & 0xFF
+                g = int(params[3]) & 0xFF
+                b = int(params[4]) & 0xFF
+                rgb = (r << 16) | (g << 8) | b
+                if is_foreground:
+                    self.foreground24 = rgb
+                else:
+                    self.background24 = rgb
+                return 4
+        except (ValueError, IndexError):
+            pass
+        
+        return 0
+    
+    def _parse_rgb_params(self, params: list, start_idx: int) -> Optional[int]:
+        """Extract RGB value from parameter list. Returns RGB int or None."""
+        try:
+            r = int(params[start_idx]) & 0xFF
+            g = int(params[start_idx + 1]) & 0xFF
+            b = int(params[start_idx + 2]) & 0xFF
+            return (r << 16) | (g << 8) | b
+        except (ValueError, IndexError):
+            return None
     
     def _handle_pablodraw_color(self, seq: bytes):
         """Handle PabloDraw 24-bit ANSI color sequences (CSI...t)."""
@@ -559,15 +509,12 @@ class AnsiParser:
         
         try:
             color_type = int(params[0])
-            r = int(params[1]) & 0xFF if len(params) > 1 else 0
-            g = int(params[2]) & 0xFF if len(params) > 2 else 0
-            b = int(params[3]) & 0xFF if len(params) > 3 else 0
-            rgb = (r << 16) | (g << 8) | b
-            
-            if color_type == 0:
-                self.background24 = rgb
-            elif color_type == 1:
-                self.foreground24 = rgb
+            rgb = self._parse_rgb_params(params, 1)
+            if rgb is not None:
+                if color_type == 0:
+                    self.background24 = rgb
+                elif color_type == 1:
+                    self.foreground24 = rgb
         except (ValueError, IndexError):
             pass
     
@@ -638,35 +585,6 @@ def ans_to_ddw(input_path: str, output_path: str, columns: int = 80,
         data = f.read()
     
     file_data, sauce = parse_sauce(data)
-
-    # Debug output
-    if sauce:
-        print(f"DEBUG: SAUCE record found")
-        print(f"DEBUG: Title: {sauce.title}")
-        print(f"DEBUG: Author: {sauce.author}")
-        print(f"DEBUG: to_ddw_rows returns {len(sauce.to_ddw_rows())} rows")
-    else:
-        print("DEBUG: No SAUCE record found")
-    
-    parser = AnsiParser(columns=columns, icecolors=icecolors, encoding=encoding)
-    chars = parser.parse(file_data)
-    
-    rows = []
-    
-    if sauce:
-        rows.extend(sauce.to_ddw_rows())
-    
-    rows.extend([char.to_ddw_row(frame_id="ANSI art") for char in chars])
-    
-    with open(output_path, 'w', encoding='utf-8') as f:
-        for row in rows:
-            f.write(json.dumps(row) + '\n')
-    
-    print(f"Converted {len(chars)} characters from {input_path} to {output_path}")
-    print(f"Dimensions: {parser.column_max + 1} x {parser.row_max + 1}")
-    print(f"Encoding: {encoding}")
-    if sauce:
-        print(f"SAUCE: {sauce.title or '(no title)'} by {sauce.author or '(no author)'}")
 
 def main():
     if len(sys.argv) < 3:
