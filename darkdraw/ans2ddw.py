@@ -121,12 +121,40 @@ class SauceRecord:
     t_flags: int = 0
     t_info_s: str = ""
     
-def sauce_to_row(self, y: int, text: str, label: str) -> dict:
-    return {
-        "type": "", "x": 0, "y": y, "text": text,
-        "color": "", "tags": [], "group": "",
-        "frame": "SAUCE record", "id": label, "rows": []
-    }
+    def sauce_to_rows(self) -> List[dict]:
+        """Convert SAUCE record to DarkDraw text rows."""
+        fields = [
+            (self.title, "Title"),
+            (self.author, "Author"),
+            (self.group, "Group"),
+            (self.date, "Date"),
+        ]
+        
+        if self.t_info1 or self.t_info2:
+            fields.append((f"{self.t_info1}x{self.t_info2}", "Dimensions"))
+        
+        if self.t_flags:
+            flags = [
+                ("non-blink", 0x01),
+                ("letter-spacing", 0x02),
+                ("aspect-ratio", 0x04)
+            ]
+            flag_text = ", ".join(f for f, bit in flags if self.t_flags & bit) or str(self.t_flags)
+            fields.append((flag_text, "Flags"))
+        
+        if self.t_info_s:
+            fields.append((self.t_info_s, "Font"))
+        
+        fields.extend((comment, f"Comment {i}") for i, comment in enumerate(self.comments, 1))
+        
+        return [
+            {
+                "type": "", "x": 0, "y": y, "text": text,
+                "color": "", "tags": [], "group": "",
+                "frame": "SAUCE record", "id": label, "rows": []
+            }
+            for y, (text, label) in enumerate((text, label) for text, label in fields if text)
+        ]
 
 @dataclass
 class AnsiChar:
