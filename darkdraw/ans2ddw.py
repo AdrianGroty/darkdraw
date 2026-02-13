@@ -5,7 +5,6 @@ import sys
 import json
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
-from functools import lru_cache
 
 # Control characters
 LF = 10
@@ -85,7 +84,6 @@ def iso8859_1_to_utf8(byte_val: int) -> str:
     """Convert ISO-8859-1 byte value to UTF-8 character."""
     return chr(byte_val)
 
-@lru_cache(maxsize=4096)
 def rgb_to_256color(rgb: int) -> int:
     """Convert 24-bit RGB to nearest xterm 256 color code."""
     r = (rgb >> 16) & 0xFF
