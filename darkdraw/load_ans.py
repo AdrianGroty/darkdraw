@@ -8,6 +8,7 @@ from .ans2ddw import AnsiParser
 vd.option('ans_columns', 80, 'width in characters for ANSI files')
 vd.option('ans_icecolors', False, 'enable iCE colors (blinking -> bright backgrounds)')
 vd.option('ans_encoding', 'cp437', 'character encoding: cp437/dos, iso8859-1/amiga, or utf-8')
+vd.option('ans_vga_colors', False, 'convert SGR color codes to VGA palette when importing .ans files')
 
 @VisiData.api
 def open_ans(vd, p):
@@ -23,6 +24,7 @@ def open_ans(vd, p):
     enc_input = vd.options.ans_encoding.lower()
     cols = vd.options.ans_columns
     ice = vd.options.ans_icecolors
+    vga = vd.options.ans_vga_colors
 
     # 3. Handle aliases for encoding
     # Map 'dos' -> 'cp437' and 'amiga' -> 'iso8859-1' to match AnsiParser logic
@@ -37,7 +39,8 @@ def open_ans(vd, p):
     parser = AnsiParser(
         columns=cols,
         icecolors=ice,
-        encoding=enc
+        encoding=enc,
+        vga_colors=vga
     )
     
     # 5. Parse the data into AnsiChar objects
@@ -46,8 +49,8 @@ def open_ans(vd, p):
     # 6. Convert to rows, including SAUCE if present
     rows = []
     if sauce:
-        rows.extend(sauce.to_ddw_rows())
-    rows.extend([char.to_ddw_row() for char in chars])
+        rows.extend(sauce.sauce_to_rows())
+    rows.extend([char.to_ddw_row(vga_colors=vga) for char in chars])
 
     # 7. Generate JSONL output for DrawingSheet
     ddwoutput = '\n'.join(json.dumps(r) for r in rows) + '\n'

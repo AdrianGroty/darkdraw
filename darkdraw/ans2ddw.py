@@ -53,6 +53,26 @@ def _build_256_color_palette():
 
 COLOR_256_PALETTE = _build_256_color_palette()
 
+# VGA palette (MS-DOS text mode colors 0-15)
+VGA_PALETTE = [
+    (0, 0, 0),       # 0: Black
+    (170, 0, 0),     # 1: Red
+    (0, 170, 0),     # 2: Green
+    (170, 85, 0),    # 3: Yellow/Brown
+    (0, 0, 170),     # 4: Blue
+    (170, 0, 170),   # 5: Magenta
+    (0, 170, 170),   # 6: Cyan
+    (170, 170, 170), # 7: Light Gray
+    (85, 85, 85),    # 8: Dark Gray
+    (255, 85, 85),   # 9: Light Red
+    (85, 255, 85),   # 10: Light Green
+    (255, 255, 85),  # 11: Yellow
+    (85, 85, 255),   # 12: Light Blue
+    (255, 85, 255),  # 13: Light Magenta
+    (85, 255, 255),  # 14: Light Cyan
+    (255, 255, 255), # 15: White
+]
+
 # CP437 (DOS) to Unicode mapping for characters 128-255
 CP437_TO_UNICODE = [
     0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
@@ -100,6 +120,15 @@ def rgb_to_256color(rgb: int) -> int:
             best_match = i
     
     return best_match
+
+def vga_to_256color(ansi_color: int) -> int:
+    """Convert ANSI color code (0-15) to nearest xterm 256 color using VGA palette."""
+    if ansi_color < 0 or ansi_color >= len(VGA_PALETTE):
+        return ansi_color
+    
+    r, g, b = VGA_PALETTE[ansi_color]
+    rgb = (r << 16) | (g << 8) | b
+    return rgb_to_256color(rgb)
 
 @dataclass
 class SauceRecord:
@@ -171,9 +200,20 @@ class AnsiChar:
     reverse: bool = False
     dim: bool = False
     
-    def to_ddw_row(self, frame_id: Optional[str] = None) -> dict:
-        fg = str(rgb_to_256color(self.foreground24)) if self.foreground24 else str(self.foreground)
-        bg = f"on {rgb_to_256color(self.background24)}" if self.background24 else f"on {self.background}"
+    def to_ddw_row(self, frame_id: Optional[str] = None, vga_colors: bool = False) -> dict:
+        if self.foreground24:
+            fg = str(rgb_to_256color(self.foreground24))
+        elif vga_colors:
+            fg = str(vga_to_256color(self.foreground))
+        else:
+            fg = str(self.foreground)
+        
+        if self.background24:
+            bg = f"on {rgb_to_256color(self.background24)}"
+        elif vga_colors:
+            bg = f"on {vga_to_256color(self.background)}"
+        else:
+            bg = f"on {self.background}"
         
         attrs = [fg, bg]
         if self.bold: attrs.append("bold")
@@ -192,10 +232,11 @@ class AnsiChar:
 class AnsiParser:
     """Parse ANSI escape sequences and build character buffer."""
     
-    def __init__(self, columns: int = 80, icecolors: bool = False, encoding: str = 'cp437'):
+    def __init__(self, columns: int = 80, icecolors: bool = False, encoding: str = 'cp437', vga_colors: bool = False):
         self.columns = columns
         self.icecolors = icecolors
         self.encoding = encoding
+        self.vga_colors = vga_colors
         
         self.background = 0
         self.foreground = 7
@@ -605,12 +646,24 @@ def parse_sauce(data: bytes) -> Tuple[bytes, Optional[SauceRecord]]:
     return file_data, sauce
 
 def ans_to_ddw(input_path: str, output_path: str, columns: int = 80, 
-               icecolors: bool = False, encoding: str = 'cp437'):
+               icecolors: bool = False, encoding: str = 'cp437', vga_colors: bool = False):
     """Convert ANSI file to DarkDraw format."""
     with open(input_path, 'rb') as f:
         data = f.read()
     
     file_data, sauce = parse_sauce(data)
+    
+    parser = AnsiParser(columns=columns, icecolors=icecolors, encoding=encoding, vga_colors=vga_colors)
+    chars = parser.parse(file_data)
+    
+    rows = []
+    if sauce:
+        rows.extend(sauce.sauce_to_rows())
+    rows.extend([char.to_ddw_row(vga_colors=vga_colors) for char in chars])
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for row in rows:
+            f.write(json.dumps(row) + '\n')
 
 def main():
     if len(sys.argv) < 3:
@@ -619,6 +672,7 @@ def main():
         print()
         print("Options:")
         print("  --icecolors: enable iCE colors (blinking -> bright backgrounds)")
+        print("  --vga-colors: map ANSI colors to VGA palette before xterm-256 conversion")
         print("  --amiga: use ISO-8859-1 encoding (Amiga ANSI)")
         print("  --pc: use CP437 encoding (PC/DOS ANSI, default)")
         print("  --utf8: use UTF-8 encoding (modern ANSI)")
@@ -629,6 +683,7 @@ def main():
     columns = 80
     icecolors = False
     encoding = 'cp437'
+    vga_colors = False
     
     if len(sys.argv) > 3:
         try:
@@ -639,6 +694,9 @@ def main():
     if '--icecolors' in sys.argv:
         icecolors = True
     
+    if '--vga-colors' in sys.argv:
+        vga_colors = True
+    
     if '--amiga' in sys.argv:
         encoding = 'iso8859-1'
     elif '--utf8' in sys.argv:
@@ -646,7 +704,7 @@ def main():
     elif '--pc' in sys.argv:
         encoding = 'cp437'
     
-    ans_to_ddw(input_path, output_path, columns=columns, icecolors=icecolors, encoding=encoding)
+    ans_to_ddw(input_path, output_path, columns=columns, icecolors=icecolors, encoding=encoding, vga_colors=vga_colors)
 
 if __name__ == '__main__':
     main()
