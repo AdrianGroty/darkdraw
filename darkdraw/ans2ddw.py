@@ -110,6 +110,10 @@ def rgb_to_256color(rgb: int) -> int:
     g = (rgb >> 8) & 0xFF
     b = rgb & 0xFF
     
+    # Special case: map black (0,0,0) to index 16 instead of 0
+    if r == 0 and g == 0 and b == 0:
+        return 16
+    
     best_match = 0
     best_distance = float('inf')
     
