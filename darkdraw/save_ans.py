@@ -1,150 +1,54 @@
-from visidata import vd, VisiData
+import json
+import io
+from visidata import VisiData, vd
 
-# Color names mapping to 256-color codes
-color_names = {
-    'black': 0, 'red': 1, 'green': 2, 'yellow': 3,
-    'blue': 4, 'magenta': 5, 'cyan': 6, 'white': 7,
-    'gray': 8, 'bright red': 9, 'bright green': 10,
-    'bright yellow': 11, 'bright blue': 12, 'bright magenta': 13,
-    'bright cyan': 14, 'bright white': 15,
-}
+from .ddw2ans import load_ddw_rows, render_ansi, build_sauce_block, build_comment_block
 
-def get_color_code(color):
-    """Convert color name or number to 256-color code."""
-    if color.isdigit():
-        return int(color)
-    color = color.lower()
-    if color in color_names:
-        return color_names[color]
-    else:
-        vd.warning(f'Unknown color {color} exported as black')
-        return 0  # default to black
-
-def parse_color(color_str):
-    """Parse color string into attributes, foreground, and background."""
-    parts = color_str.split(' on ')
-    if len(parts) == 1:
-        fg_part = parts[0]
-        bg = None
-    else:
-        fg_part = parts[0]
-        bg = parts[1].strip()
-
-    words = fg_part.split()
-    attributes = []
-    color_candidates = []
-    for word in words:
-        if word in ['bold', 'italic', 'underline', 'reverse', 'dim', 'blink']:
-            attributes.append(word)
-        else:
-            color_candidates.append(word)
-
-    if color_candidates:
-        for candidate in color_candidates:
-            if candidate.isdigit():
-                fg = candidate
-                break
-        else:
-            fg = color_candidates[-1]
-    else:
-        fg = 'white'
-
-    return attributes, fg, bg
-
-def get_escape_codes(attributes, fg, bg):
-    """Generate ANSI escape codes for attributes and colors."""
-    codes = []
-    attr_codes = {
-        'bold': '1', 'dim': '2', 'italic': '3',
-        'underline': '4', 'blink': '5', 'reverse': '7',
-    }
-    for attr in attributes:
-        if attr in attr_codes:
-            codes.append(attr_codes[attr])
-
-    fg_code = get_color_code(fg)
-    codes.append(f'38;5;{fg_code}')
-
-    if bg:
-        bg_code = get_color_code(bg)
-        codes.append(f'48;5;{bg_code}')
-
-    return '\033[' + ';'.join(codes) + 'm' if codes else ''
-
-def export_frame(rows, x_col, y_col, text_col, color_col):
-    """Export a single frame to ANSI text."""
-    if not rows:
-        return ''
-
-    # Find max_x and max_y
-    max_x = 0
-    max_y = 0
-    for row in rows:
-        x = int(x_col.getValue(row))
-        y = int(y_col.getValue(row))
-        text = str(text_col.getValue(row))
-        max_x = max(max_x, x + len(text) - 1)
-        max_y = max(max_y, y)
-
-    # Create grid
-    grid = [[None] * (max_x + 1) for _ in range(max_y + 1)]
-
-    # Place characters
-    for row in rows:
-        x = int(x_col.getValue(row))
-        y = int(y_col.getValue(row))
-        text = str(text_col.getValue(row))
-        color_str = str(color_col.getValue(row))
-        attributes, fg, bg = parse_color(color_str)
-        for i, char in enumerate(text):
-            grid[y][x + i] = (char, attributes, fg, bg)
-
-    # Generate output
-    output = ''
-    for y in range(max_y + 1):
-        line = ''
-        for x in range(max_x + 1):
-            cell = grid[y][x]
-            if cell:
-                char, attributes, fg, bg = cell
-                codes = get_escape_codes(attributes, fg, bg)
-                line += codes + char + '\033[0m'
-            else:
-                line += ' '
-        output += line + '\n'
-    return output
+# ── Options (mirrors load_ans.py) ─────────────────────────────────────────────
+vd.option('ans_columns',    80,      'width in characters for ANSI files')
+vd.option('ans_icecolors',  False,   'enable iCE colors (blinking -> bright backgrounds)')
+vd.option('ans_encoding',   'cp437', 'character encoding: cp437/dos, iso8859-1/amiga, or utf-8')
+vd.option('ans_vga_colors', False,   'convert SGR color codes to VGA palette when importing .ans files')
+# Save-only options
+vd.option('ans_256color',   False,   'emit xterm 256-color SGR sequences when saving .ans files')
+vd.option('ans_truecolor',  False,   'emit 24-bit RGB SGR sequences (38;2;r;g;b) when saving .ans files')
+vd.option('ans_sauce',      True,    'write SAUCE record when saving .ans files')
 
 @VisiData.api
-def save_ans(vd, p, sheet):
-    """Save the current sheet as an ANSI text file, exporting only rows with empty frame and type."""
-    required_columns = ['x', 'y', 'text', 'color']
-    columns_dict = {col.name: col for col in sheet.columns}
-    for col_name in required_columns:
-        if col_name not in columns_dict:
-            vd.fail(f'Missing column: {col_name}')
+def save_ans(vd, p, vs):
+    """Save a DrawingSheet as an ANSI .ans file."""
+    rows_jsonl = '\n'.join(json.dumps(r) for r in vs.rows) + '\n'
+    chars, sauce = load_ddw_rows(io.StringIO(rows_jsonl))
 
-    x_col = columns_dict['x']
-    y_col = columns_dict['y']
-    text_col = columns_dict['text']
-    color_col = columns_dict['color']
-    frame_col = columns_dict.get('frame', None)
-    type_col = columns_dict.get('type', None)
+    cols        = vd.options.ans_columns
+    ice         = vd.options.ans_icecolors
+    use_256     = vd.options.ans_256color
+    use_true    = vd.options.ans_truecolor
+    do_sauce    = vd.options.ans_sauce
 
-    # Filter rows where both frame and type are empty
-    filtered_rows = []
-    for row in sheet.rows:
-        frame_value = frame_col.getValue(row) if frame_col else None
-        type_value = type_col.getValue(row) if type_col else None
-        # Consider a value empty if it is None or an empty string
-        if (frame_value is None or frame_value == '') and (type_value is None or type_value == ''):
-            filtered_rows.append(row)
+    enc_input = vd.options.ans_encoding.lower()
+    if enc_input == 'dos':
+        enc = 'cp437'
+    elif enc_input == 'amiga':
+        enc = 'iso8859-1'
+    else:
+        enc = enc_input
 
-    if not filtered_rows:
-        vd.fail('Drawing is animation; cannot export as ANSI.')
+    ansi_bytes = render_ansi(chars, columns=cols,
+                             use_256color=use_256, icecolors=ice,
+                             use_truecolor=use_true, encoding=enc)
 
-    # Export filtered rows as a single frame
-    output = export_frame(filtered_rows, x_col, y_col, text_col, color_col)
+    with p.open_bytes(mode='wb') as f:
+        f.write(ansi_bytes)
+        f.write(bytes([26]))
 
-    with open(p, 'w') as f:
-        f.write(output)
-    vd.status(f'Saved {len(filtered_rows)} rows to {p}')
+        if do_sauce and sauce:
+            file_size     = len(ansi_bytes) + 1
+            comment_block = build_comment_block(sauce.comments)
+            sauce_block   = build_sauce_block(
+                sauce, file_size,
+                columns=sauce.t_info1 or cols,
+                rows=sauce.t_info2 or 0,
+            )
+            f.write(comment_block)
+            f.write(sauce_block)
