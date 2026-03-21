@@ -1,11 +1,11 @@
 from unittest import mock
+from importlib.resources import files
 from visidata import AttrDict, VisiData, colors, vd, dispwidth
-from importlib import resources as importlib_resources
 import curses
 
 from .drawing import Drawing, DrawingSheet
 
-vd.option('darkdraw_html_tmpl', '', 'filename of HTML template to use for ansihtml saver')
+vd.option('darkdraw_html_tmpl', str(files(__name__).joinpath('ansi.html')), 'filename of HTML template to use for ansihtml saver')
 
 
 def split_colorstr(colorstr):
