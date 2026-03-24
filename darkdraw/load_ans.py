@@ -28,6 +28,10 @@ def open_ans(vd, p):
 
     ignore_sauce = vd.options.ans_ignore_sauce
 
+    # Infer encoding from SAUCE font name unless overridden by the user option.
+    if not ignore_sauce and sauce and sauce.t_info_s.startswith('Amiga'):
+        enc = 'iso8859-1'
+
     if not ignore_sauce and sauce and sauce.t_info1:
         cols = sauce.t_info1
     else:
