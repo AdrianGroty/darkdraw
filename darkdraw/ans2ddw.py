@@ -649,22 +649,28 @@ def parse_sauce(data: bytes) -> Tuple[bytes, Optional[SauceRecord]]:
     
     return file_data, sauce
 
-def ans_to_ddw(input_path: str, output_path: str, columns: int = 80, 
+def ans_to_ddw(input_path: str, output_path: str, columns: int = 80,
                icecolors: bool = False, encoding: str = 'cp437', vga_colors: bool = False):
     """Convert ANSI file to DarkDraw format."""
     with open(input_path, 'rb') as f:
         data = f.read()
-    
+
     file_data, sauce = parse_sauce(data)
-    
+
+    # Infer cols and icecolors from SAUCE if present, else use args.
+    if sauce and sauce.t_info1:
+        columns = sauce.t_info1
+    if sauce:
+        icecolors = bool(sauce.t_flags & 0x01)
+
     parser = AnsiParser(columns=columns, icecolors=icecolors, encoding=encoding, vga_colors=vga_colors)
     chars = parser.parse(file_data)
-    
+
     rows = []
     if sauce:
         rows.extend(sauce.sauce_to_rows())
     rows.extend([char.to_ddw_row(vga_colors=vga_colors) for char in chars])
-    
+
     with open(output_path, 'w', encoding='utf-8') as f:
         for row in rows:
             f.write(json.dumps(row) + '\n')
