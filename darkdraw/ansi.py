@@ -1,30 +1,33 @@
-#!/usr/bin/env python3
-"""Convert ANSI art files (.ans) to DarkDraw format (.ddw)."""
+"""Pure ANSI art parsing and rendering. No VisiData dependencies."""
 
-import sys
-import json
+import datetime
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
-# Control characters
+# ── Byte-level constants (parser) ────────────────────────────────────────────
+
 LF = 10
 CR = 13
 TAB = 9
 SUB = 26
 ESC = 27
 
-# State machine states
 STATE_TEXT = 0
 STATE_SEQUENCE = 1
 STATE_END = 2
 
 ANSI_SEQUENCE_MAX_LENGTH = 32
 
-# 256-color palette (xterm colors)
+# ── String constants (renderer) ──────────────────────────────────────────────
+
+CSI = '\x1b['
+
+# ── Palettes and tables ─────────────────────────────────────────────────────
+
 def _build_256_color_palette():
     """Build the standard xterm 256-color palette."""
     palette = []
-    
+
     # 0-15: Standard ANSI colors
     ansi_colors = [
         (0, 0, 0), (128, 0, 0), (0, 128, 0), (128, 128, 0),
@@ -33,7 +36,7 @@ def _build_256_color_palette():
         (0, 0, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
     ]
     palette.extend(ansi_colors)
-    
+
     # 16-231: 6x6x6 RGB cube
     for r in range(6):
         for g in range(6):
@@ -43,17 +46,16 @@ def _build_256_color_palette():
                     0 if g == 0 else 55 + g * 40,
                     0 if b == 0 else 55 + b * 40
                 ))
-    
+
     # 232-255: grayscale ramp
     for i in range(24):
         gray = 8 + i * 10
         palette.append((gray, gray, gray))
-    
+
     return palette
 
 COLOR_256_PALETTE = _build_256_color_palette()
 
-# VGA palette (MS-DOS text mode colors 0-15)
 VGA_PALETTE = [
     (0, 0, 0),       # 0: Black
     (170, 0, 0),     # 1: Red
@@ -73,7 +75,6 @@ VGA_PALETTE = [
     (255, 255, 255), # 15: White
 ]
 
-# CP437 (DOS) to Unicode mapping for characters 128-255
 CP437_TO_UNICODE = [
     0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
     0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
@@ -93,15 +94,23 @@ CP437_TO_UNICODE = [
     0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0,
 ]
 
+# ── Encoding / color conversion helpers ──────────────────────────────────────
+
+def resolve_encoding(enc):
+    """Normalise encoding aliases: 'dos'->'cp437', 'amiga'->'iso8859-1'."""
+    enc = enc.lower()
+    if enc == 'dos':
+        return 'cp437'
+    elif enc == 'amiga':
+        return 'iso8859-1'
+    return enc
+
 def cp437_to_utf8(byte_val: int) -> str:
-    """Convert CP437 byte value to UTF-8 character."""
     if byte_val < 128:
         return chr(byte_val)
-    else:
-        return chr(CP437_TO_UNICODE[byte_val - 128])
+    return chr(CP437_TO_UNICODE[byte_val - 128])
 
 def iso8859_1_to_utf8(byte_val: int) -> str:
-    """Convert ISO-8859-1 byte value to UTF-8 character."""
     return chr(byte_val)
 
 def rgb_to_256color(rgb: int) -> int:
@@ -109,30 +118,31 @@ def rgb_to_256color(rgb: int) -> int:
     r = (rgb >> 16) & 0xFF
     g = (rgb >> 8) & 0xFF
     b = rgb & 0xFF
-    
-    # Special case: map black (0,0,0) to index 16 instead of 0
+
     if r == 0 and g == 0 and b == 0:
         return 16
-    
+
     best_match = 0
     best_distance = float('inf')
-    
+
     for i, (pr, pg, pb) in enumerate(COLOR_256_PALETTE):
         distance = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
         if distance < best_distance:
             best_distance = distance
             best_match = i
-    
+
     return best_match
 
 def vga_to_256color(ansi_color: int) -> int:
     """Convert ANSI color code (0-15) to nearest xterm 256 color using VGA palette."""
     if ansi_color < 0 or ansi_color >= len(VGA_PALETTE):
         return ansi_color
-    
+
     r, g, b = VGA_PALETTE[ansi_color]
     rgb = (r << 16) | (g << 8) | b
     return rgb_to_256color(rgb)
+
+# ── SAUCE record ─────────────────────────────────────────────────────────────
 
 @dataclass
 class SauceRecord:
@@ -151,7 +161,7 @@ class SauceRecord:
     comments: List[str] = field(default_factory=list)
     t_flags: int = 0
     t_info_s: str = ""
-    
+
     def sauce_to_rows(self) -> List[dict]:
         """Convert SAUCE record to DarkDraw text rows."""
         fields = [
@@ -160,10 +170,10 @@ class SauceRecord:
             (self.group, "Group"),
             (self.date, "Date"),
         ]
-        
+
         if self.t_info1 or self.t_info2:
             fields.append((f"{self.t_info1}x{self.t_info2}", "Dimensions"))
-        
+
         if self.t_flags:
             flags = [
                 ("non-blink", 0x01),
@@ -172,12 +182,12 @@ class SauceRecord:
             ]
             flag_text = ", ".join(f for f, bit in flags if self.t_flags & bit) or str(self.t_flags)
             fields.append((flag_text, "Flags"))
-        
+
         if self.t_info_s:
             fields.append((self.t_info_s, "Font"))
-        
+
         fields.extend((comment, f"Comment {i}") for i, comment in enumerate(self.comments, 1))
-        
+
         return [
             {
                 "type": label, "x": 0, "y": y, "text": text,
@@ -186,6 +196,58 @@ class SauceRecord:
             }
             for y, (text, label) in enumerate((text, label) for text, label in fields if text)
         ]
+
+def parse_sauce(data: bytes) -> Tuple[bytes, Optional[SauceRecord]]:
+    """Parse SAUCE record from end of file data."""
+    if len(data) < 128:
+        return data, None
+
+    sauce_offset = len(data) - 128
+    sauce_block = data[sauce_offset:]
+
+    if sauce_block[:5] != b'SAUCE':
+        return data, None
+
+    sauce = SauceRecord()
+    sauce.title = sauce_block[7:42].rstrip(b'\x00').decode('cp437', errors='ignore')
+    sauce.author = sauce_block[42:62].rstrip(b'\x00').decode('cp437', errors='ignore')
+    sauce.group = sauce_block[62:82].rstrip(b'\x00').decode('cp437', errors='ignore')
+    sauce.date = sauce_block[82:90].decode('cp437', errors='ignore')
+    sauce.file_size = int.from_bytes(sauce_block[90:94], 'little')
+    sauce.data_type = sauce_block[94]
+    sauce.file_type = sauce_block[95]
+    sauce.t_info1 = int.from_bytes(sauce_block[96:98], 'little')
+    sauce.t_info2 = int.from_bytes(sauce_block[98:100], 'little')
+    sauce.t_info3 = int.from_bytes(sauce_block[100:102], 'little')
+    sauce.t_info4 = int.from_bytes(sauce_block[102:104], 'little')
+    num_comments = sauce_block[104]
+    sauce.t_flags = sauce_block[105]
+    sauce.t_info_s = sauce_block[106:128].rstrip(b'\x00').decode('cp437', errors='ignore')
+
+    file_data = data[:sauce_offset]
+
+    if num_comments > 0:
+        comment_size = num_comments * 64 + 5
+        comment_offset = sauce_offset - comment_size
+
+        if comment_offset >= 0:
+            comment_block = data[comment_offset:sauce_offset]
+
+            if comment_block[:5] == b'COMNT':
+                for i in range(num_comments):
+                    start = 5 + i * 64
+                    end = start + 64
+                    comment_line = comment_block[start:end].rstrip(b'\x00').decode('cp437', errors='ignore')
+                    sauce.comments.append(comment_line)
+
+                file_data = data[:comment_offset]
+
+    if file_data and file_data[-1] == SUB:
+        file_data = file_data[:-1]
+
+    return file_data, sauce
+
+# ── AnsiChar (parser output) ─────────────────────────────────────────────────
 
 @dataclass
 class AnsiChar:
@@ -203,7 +265,7 @@ class AnsiChar:
     blink: bool = False
     reverse: bool = False
     dim: bool = False
-    
+
     def to_ddw_row(self, frame_id: Optional[str] = None, vga_colors: bool = False) -> dict:
         if self.foreground24:
             fg = str(rgb_to_256color(self.foreground24))
@@ -211,14 +273,14 @@ class AnsiChar:
             fg = str(vga_to_256color(self.foreground))
         else:
             fg = str(self.foreground)
-        
+
         if self.background24:
             bg = f"on {rgb_to_256color(self.background24)}"
         elif vga_colors:
             bg = f"on {vga_to_256color(self.background)}"
         else:
             bg = f"on {self.background}"
-        
+
         attrs = [fg, bg]
         if self.bold: attrs.append("bold")
         if self.italic: attrs.append("italic")
@@ -226,65 +288,59 @@ class AnsiChar:
         if self.blink: attrs.append("blink")
         if self.reverse: attrs.append("reverse")
         if self.dim: attrs.append("dim")
-        
+
         return {
             "type": "", "x": self.column, "y": self.row,
             "text": self.character, "color": " ".join(attrs),
             "tags": [], "group": "", "frame": frame_id or "", "id": "", "rows": []
         }
 
+# ── ANSI parser ──────────────────────────────────────────────────────────────
+
 class AnsiParser:
     """Parse ANSI escape sequences and build character buffer."""
-    
-    def __init__(self, columns: int = 80, icecolors: bool = False, encoding: str = 'cp437', vga_colors: bool = False):
+
+    def __init__(self, columns: int = 80, icecolors: bool = False,
+                 encoding: str = 'cp437', vga_colors: bool = False):
         self.columns = columns
         self.icecolors = icecolors
         self.encoding = encoding
         self.vga_colors = vga_colors
-        
+
         self.background = 0
         self.foreground = 7
         self.background24 = 0
         self.foreground24 = 0
-        
+
         self.bold = False
         self.blink = False
         self.invert = False
         self.italic = False
         self.underline = False
         self.dim = False
-        
+
         self.column = 0
         self.row = 0
         self.saved_row = 0
         self.saved_column = 0
-        
+
         self.chars: List[AnsiChar] = []
         self.column_max = 0
         self.row_max = 0
-        
+
     def parse(self, data: bytes) -> List[AnsiChar]:
         """Parse ANSI data and return character list."""
         state = STATE_TEXT
         i = 0
         length = len(data)
-        
-        # For UTF-8, decode once upfront
-        if self.encoding == 'utf-8':
-            try:
-                text = data.decode('utf-8', errors='replace')
-                return self._parse_unicode(text)
-            except Exception:
-                # Fallback if decode fails entirely
-                pass
-        
+
         while i < length:
             cursor = data[i]
-            
+
             if self.column == self.columns:
                 self.row += 1
                 self.column = 0
-            
+
             if state == STATE_TEXT:
                 if cursor == LF:
                     self.row += 1
@@ -326,26 +382,26 @@ class AnsiParser:
                         self._add_char(iso8859_1_to_utf8(cursor))
                     else:
                         self._add_char(cp437_to_utf8(cursor))
-                    
+
             elif state == STATE_SEQUENCE:
                 seq_len = self._parse_sequence(data[i:])
                 i += seq_len
                 state = STATE_TEXT
-                
+
             elif state == STATE_END:
                 break
-                
+
             i += 1
-        
+
         return self.chars
-    
+
     def _add_char(self, char: str):
         """Add character to buffer with current attributes."""
         if self.column > self.column_max:
             self.column_max = self.column
         if self.row > self.row_max:
             self.row_max = self.row
-        
+
         if self.invert:
             bg = self.foreground % 8
             fg = self.background + (self.foreground & 8)
@@ -356,23 +412,23 @@ class AnsiParser:
             fg = self.foreground
             bg24 = self.background24
             fg24 = self.foreground24
-        
+
         self.chars.append(AnsiChar(
             column=self.column, row=self.row, background=bg, foreground=fg,
             background24=bg24, foreground24=fg24, character=char,
             bold=self.bold, italic=self.italic, underline=self.underline,
             blink=self.blink, reverse=self.invert, dim=self.dim
         ))
-        
+
         self.column += 1
-    
+
     def _parse_sequence(self, data: bytes) -> int:
         """Parse CSI sequence and return length consumed."""
         max_len = min(len(data), ANSI_SEQUENCE_MAX_LENGTH)
-        
+
         for seq_len in range(max_len):
             seq_char = chr(data[seq_len]) if seq_len < len(data) else ''
-            
+
             if seq_char in ('H', 'f'):
                 self._handle_cursor_position(data[:seq_len])
                 return seq_len
@@ -417,13 +473,12 @@ class AnsiParser:
                 return seq_len
             if 64 <= ord(seq_char) <= 126:
                 return seq_len
-        
+
         return 0
-    
+
     def _handle_cursor_position(self, seq: bytes):
-        """Handle cursor position escape sequence."""
         seq_str = seq.decode('ascii', errors='ignore')
-        
+
         if seq_str.startswith(';'):
             parts = seq_str[1:].split(';')
             row = 1
@@ -432,19 +487,18 @@ class AnsiParser:
             parts = seq_str.split(';')
             row = int(parts[0]) if parts and parts[0] else 1
             col = int(parts[1]) if len(parts) > 1 and parts[1] else 1
-        
+
         self.row = max(0, row - 1)
         self.column = max(0, col - 1)
-    
+
     def _handle_sgr(self, seq: bytes):
         """Handle SGR (Select Graphic Rendition) sequence."""
         seq_str = seq.decode('ascii', errors='ignore')
         params = [p.strip() for p in seq_str.split(';') if p.strip()]
-        
+
         if not params:
             params = ['0']
-        
-        # Lookup tables for simple attribute toggles
+
         ATTR_ON = {
             1: ('bold', True),
             2: ('dim', True),
@@ -453,7 +507,7 @@ class AnsiParser:
             5: ('blink', True),
             7: ('invert', True),
         }
-        
+
         ATTR_OFF = {
             22: ['bold', 'dim'],
             23: ['italic'],
@@ -461,7 +515,7 @@ class AnsiParser:
             25: ['blink'],
             27: ['invert'],
         }
-        
+
         i = 0
         while i < len(params):
             try:
@@ -469,8 +523,7 @@ class AnsiParser:
             except ValueError:
                 i += 1
                 continue
-            
-            # Reset all
+
             if val == 0:
                 self.background = 0
                 self.background24 = 0
@@ -478,19 +531,17 @@ class AnsiParser:
                 self.foreground24 = 0
                 self.bold = self.blink = self.invert = False
                 self.italic = self.underline = self.dim = False
-            
-            # Simple attribute toggles
+
             elif val in ATTR_ON:
                 attr, value = ATTR_ON[val]
                 setattr(self, attr, value)
-                if val == 1:  # bold also brightens foreground
+                if val == 1:
                     self.foreground = (self.foreground % 8) + 8
                     self.foreground24 = 0
-                elif val == 5 and self.icecolors:  # blink in ice mode
+                elif val == 5 and self.icecolors:
                     self.background = (self.background % 8) + 8
                     self.blink = False
-            
-            # Attribute off
+
             elif val in ATTR_OFF:
                 for attr in ATTR_OFF[val]:
                     setattr(self, attr, False)
@@ -498,42 +549,38 @@ class AnsiParser:
                     self.foreground -= 8
                 elif val == 25 and self.icecolors and self.background >= 8:
                     self.background -= 8
-            
-            # Foreground colors (30-37, 90-97)
+
             elif 30 <= val <= 37:
                 self.foreground = val - 30 + (8 if self.bold else 0)
                 self.foreground24 = 0
             elif 90 <= val <= 97:
-                self.foreground = val - 82  # 90 - 8 = 82
+                self.foreground = val - 82
                 self.foreground24 = 0
-            
-            # Background colors (40-47, 100-107)
+
             elif 40 <= val <= 47:
                 self.background = val - 40 + (8 if self.blink and self.icecolors else 0)
                 self.background24 = 0
             elif 100 <= val <= 107:
-                self.background = val - 92  # 100 - 8 = 92
+                self.background = val - 92
                 self.background24 = 0
-            
-            # 256-color / 24-bit color
-            elif val == 38:  # foreground
+
+            elif val == 38:
                 consumed = self._handle_extended_color(params[i:], is_foreground=True)
                 i += consumed
-            elif val == 48:  # background
+            elif val == 48:
                 consumed = self._handle_extended_color(params[i:], is_foreground=False)
                 i += consumed
-            
+
             i += 1
-    
+
     def _handle_extended_color(self, params: list, is_foreground: bool) -> int:
         """Handle 38/48 extended color sequences. Returns number of params consumed."""
         if len(params) < 3:
             return 0
-        
+
         try:
             mode = int(params[1])
-            
-            # 256-color mode
+
             if mode == 5:
                 color = int(params[2]) & 0xFF
                 if is_foreground:
@@ -543,8 +590,7 @@ class AnsiParser:
                     self.background = color
                     self.background24 = 0
                 return 2
-            
-            # 24-bit RGB mode
+
             elif mode == 2 and len(params) >= 5:
                 r = int(params[2]) & 0xFF
                 g = int(params[3]) & 0xFF
@@ -557,11 +603,10 @@ class AnsiParser:
                 return 4
         except (ValueError, IndexError):
             pass
-        
+
         return 0
-    
+
     def _parse_rgb_params(self, params: list, start_idx: int) -> Optional[int]:
-        """Extract RGB value from parameter list. Returns RGB int or None."""
         try:
             r = int(params[start_idx]) & 0xFF
             g = int(params[start_idx + 1]) & 0xFF
@@ -569,15 +614,15 @@ class AnsiParser:
             return (r << 16) | (g << 8) | b
         except (ValueError, IndexError):
             return None
-    
+
     def _handle_pablodraw_color(self, seq: bytes):
         """Handle PabloDraw 24-bit ANSI color sequences (CSI...t)."""
         seq_str = seq.decode('ascii', errors='ignore')
         params = [p.strip() for p in seq_str.split(';') if p.strip()]
-        
+
         if not params:
             return
-        
+
         try:
             color_type = int(params[0])
             rgb = self._parse_rgb_params(params, 1)
@@ -588,9 +633,8 @@ class AnsiParser:
                     self.foreground24 = rgb
         except (ValueError, IndexError):
             pass
-    
+
     def _parse_numeric(self, seq: bytes, default: int = 0) -> int:
-        """Parse numeric value from sequence."""
         seq_str = seq.decode('ascii', errors='ignore').strip()
         if not seq_str:
             return default
@@ -599,122 +643,285 @@ class AnsiParser:
         except ValueError:
             return default
 
-def parse_sauce(data: bytes) -> Tuple[bytes, Optional[SauceRecord]]:
-    """Parse SAUCE record from file data."""
-    if len(data) < 128:
-        return data, None
-    
-    sauce_offset = len(data) - 128
-    sauce_block = data[sauce_offset:]
-    
-    if sauce_block[:5] != b'SAUCE':
-        return data, None
-    
-    sauce = SauceRecord()
-    sauce.title = sauce_block[7:42].rstrip(b'\x00').decode('cp437', errors='ignore')
-    sauce.author = sauce_block[42:62].rstrip(b'\x00').decode('cp437', errors='ignore')
-    sauce.group = sauce_block[62:82].rstrip(b'\x00').decode('cp437', errors='ignore')
-    sauce.date = sauce_block[82:90].decode('cp437', errors='ignore')
-    sauce.file_size = int.from_bytes(sauce_block[90:94], 'little')
-    sauce.data_type = sauce_block[94]
-    sauce.file_type = sauce_block[95]
-    sauce.t_info1 = int.from_bytes(sauce_block[96:98], 'little')
-    sauce.t_info2 = int.from_bytes(sauce_block[98:100], 'little')
-    sauce.t_info3 = int.from_bytes(sauce_block[100:102], 'little')
-    sauce.t_info4 = int.from_bytes(sauce_block[102:104], 'little')
-    num_comments = sauce_block[104]
-    sauce.t_flags = sauce_block[105]
-    sauce.t_info_s = sauce_block[106:128].rstrip(b'\x00').decode('cp437', errors='ignore')
-    
-    file_data = data[:sauce_offset]
-    
-    if num_comments > 0:
-        comment_size = num_comments * 64 + 5
-        comment_offset = sauce_offset - comment_size
-        
-        if comment_offset >= 0:
-            comment_block = data[comment_offset:sauce_offset]
-            
-            if comment_block[:5] == b'COMNT':
-                for i in range(num_comments):
-                    start = 5 + i * 64
-                    end = start + 64
-                    comment_line = comment_block[start:end].rstrip(b'\x00').decode('cp437', errors='ignore')
-                    sauce.comments.append(comment_line)
-                
-                file_data = data[:comment_offset]
-    
-    if file_data and file_data[-1] == SUB:
-        file_data = file_data[:-1]
-    
-    return file_data, sauce
+# ── ParsedColor / DdwChar (renderer data model) ─────────────────────────────
 
-def ans_to_ddw(input_path: str, output_path: str, columns: int = 80,
-               icecolors: bool = False, encoding: str = 'cp437', vga_colors: bool = False):
-    """Convert ANSI file to DarkDraw format."""
-    with open(input_path, 'rb') as f:
-        data = f.read()
+@dataclass
+class ParsedColor:
+    fg: int = 7
+    bg: int = 0
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    blink: bool = False
+    reverse: bool = False
+    dim: bool = False
 
-    file_data, sauce = parse_sauce(data)
+def parse_color_string(color: str) -> ParsedColor:
+    """Parse a DDW color string like '7 on 0 bold italic' into attributes."""
+    pc = ParsedColor()
+    if not color:
+        return pc
 
-    # Infer cols and icecolors from SAUCE if present, else use args.
-    if sauce and sauce.t_info1:
-        columns = sauce.t_info1
-    if sauce:
-        icecolors = bool(sauce.t_flags & 0x01)
+    parts = color.split()
+    i = 0
+    while i < len(parts):
+        p = parts[i]
+        if p == 'on':
+            if i + 1 < len(parts):
+                try:
+                    pc.bg = int(parts[i + 1])
+                    i += 2
+                    continue
+                except ValueError:
+                    pass
+        elif p == 'bold':
+            pc.bold = True
+        elif p == 'italic':
+            pc.italic = True
+        elif p == 'underline':
+            pc.underline = True
+        elif p == 'blink':
+            pc.blink = True
+        elif p == 'reverse':
+            pc.reverse = True
+        elif p == 'dim':
+            pc.dim = True
+        else:
+            try:
+                pc.fg = int(p)
+            except ValueError:
+                pass
+        i += 1
+    return pc
 
-    parser = AnsiParser(columns=columns, icecolors=icecolors, encoding=encoding, vga_colors=vga_colors)
-    chars = parser.parse(file_data)
+@dataclass
+class DdwChar:
+    x: int
+    y: int
+    text: str
+    color: ParsedColor
 
-    rows = []
-    if sauce:
-        rows.extend(sauce.sauce_to_rows())
-    rows.extend([char.to_ddw_row(vga_colors=vga_colors) for char in chars])
+# ── 256 -> ANSI-16 fallback ─────────────────────────────────────────────────
 
-    with open(output_path, 'w', encoding='utf-8') as f:
-        for row in rows:
-            f.write(json.dumps(row) + '\n')
+def xterm256_to_ansi16(color: int) -> int:
+    """Map an xterm-256 color index to the nearest ANSI 0-15 index."""
+    if color < 16:
+        return color
+    if color > 255:
+        return 7
 
-def main():
-    if len(sys.argv) < 3:
-        print("Usage: ans2ddw.py <input.ans> <output.ddw> [columns] [options]")
-        print("  columns: width in characters (default: 80)")
-        print()
-        print("Options:")
-        print("  --icecolors: enable iCE colors (blinking -> bright backgrounds)")
-        print("  --vga-colors: map ANSI colors to VGA palette before xterm-256 conversion")
-        print("  --amiga: use ISO-8859-1 encoding (Amiga ANSI)")
-        print("  --pc: use CP437 encoding (PC/DOS ANSI, default)")
-        print("  --utf8: use UTF-8 encoding (modern ANSI)")
-        sys.exit(1)
-    
-    input_path = sys.argv[1]
-    output_path = sys.argv[2]
-    columns = 80
-    icecolors = False
-    encoding = 'cp437'
-    vga_colors = False
-    
-    if len(sys.argv) > 3:
+    r, g, b = COLOR_256_PALETTE[color]
+
+    best, best_dist = 0, float('inf')
+    for i, (pr, pg, pb) in enumerate(VGA_PALETTE):
+        d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
+        if d < best_dist:
+            best_dist = d
+            best = i
+    return best
+
+def ansi16_to_sgr_fg(c: int) -> int:
+    return (c - 8 + 90) if c >= 8 else (c + 30)
+
+def ansi16_to_sgr_bg(c: int) -> int:
+    return (c - 8 + 100) if c >= 8 else (c + 40)
+
+def index_to_rgb(color: int) -> Tuple[int, int, int]:
+    """xterm-256 index -> (r, g, b)."""
+    if color < 16:
+        return VGA_PALETTE[color]
+    if color > 255:
+        return VGA_PALETTE[7]
+    return COLOR_256_PALETTE[color]
+
+# ── SGR building ─────────────────────────────────────────────────────────────
+
+def build_sgr(pc: ParsedColor, prev: Optional[ParsedColor],
+              use_256color: bool, icecolors: bool,
+              use_truecolor: bool = False) -> str:
+    """Return a CSI...m string (possibly empty) to transition from prev to pc."""
+    params: List[int] = []
+
+    need_reset = prev is None
+    if need_reset:
+        params.append(0)
+        prev = ParsedColor()
+
+    def toggle(cur, prv, on_code, off_code):
+        if cur and not prv:
+            params.append(on_code)
+        elif not cur and prv:
+            params.append(off_code)
+
+    toggle(pc.bold,      prev.bold,      1, 22)
+    toggle(pc.dim,       prev.dim,       2, 22)
+    toggle(pc.italic,    prev.italic,    3, 23)
+    toggle(pc.underline, prev.underline, 4, 24)
+    toggle(pc.blink,     prev.blink,     5, 25)
+    toggle(pc.reverse,   prev.reverse,   7, 27)
+
+    if pc.fg != prev.fg:
+        if use_truecolor:
+            r, g, b = index_to_rgb(pc.fg)
+            params += [38, 2, r, g, b]
+        elif use_256color:
+            params += [38, 5, pc.fg]
+        else:
+            params.append(ansi16_to_sgr_fg(xterm256_to_ansi16(pc.fg)))
+
+    if pc.bg != prev.bg:
+        if use_truecolor:
+            r, g, b = index_to_rgb(pc.bg)
+            params += [48, 2, r, g, b]
+        elif use_256color:
+            params += [48, 5, pc.bg]
+        else:
+            bg16 = xterm256_to_ansi16(pc.bg)
+            if bg16 >= 8 and not icecolors:
+                if not pc.blink:
+                    params.append(5)
+                bg16 -= 8
+            params.append(ansi16_to_sgr_bg(bg16))
+
+    if not params:
+        return ''
+    return f"{CSI}{';'.join(str(p) for p in params)}m"
+
+# ── ANSI rendering ───────────────────────────────────────────────────────────
+
+def render_ansi(chars: List[DdwChar], columns: int = 80,
+                use_256color: bool = False, icecolors: bool = False,
+                use_truecolor: bool = False,
+                encoding: str = 'utf-8') -> bytes:
+    """Convert DdwChar list to raw ANSI bytes."""
+    if not chars:
+        return b''
+
+    chars = sorted(chars, key=lambda c: (c.y, c.x))
+
+    out: List[str] = []
+    cur_row = 0
+    cur_col = 0
+    prev_color: Optional[ParsedColor] = None
+
+    out.append(f'{CSI}0m')
+    prev_color = ParsedColor()
+
+    for ch in chars:
+        target_row, target_col = ch.y, ch.x
+
+        if target_row < cur_row:
+            out.append(f'{CSI}{target_row + 1};{target_col + 1}H')
+            cur_row, cur_col = target_row, target_col
+        elif target_row > cur_row:
+            diff = target_row - cur_row
+            if diff == 1:
+                out.append('\r\n')
+            else:
+                out.append(f'\r{CSI}{diff}B')
+            cur_row = target_row
+            cur_col = 0
+
+        if target_col > cur_col:
+            diff = target_col - cur_col
+            out.append(f'{CSI}{diff}C')
+            cur_col = target_col
+        elif target_col < cur_col:
+            out.append(f'{CSI}{target_row + 1};{target_col + 1}H')
+            cur_col = target_col
+
+        sgr = build_sgr(ch.color, prev_color, use_256color, icecolors, use_truecolor)
+        if sgr:
+            out.append(sgr)
+        prev_color = ch.color
+
+        out.append(ch.text)
+        cur_col += len(ch.text)
+
+        if cur_col >= columns:
+            cur_row += 1
+            cur_col = 0
+
+    out.append(f'{CSI}0m')
+    return ''.join(out).encode(encoding, errors='replace')
+
+# ── SAUCE serialisation ──────────────────────────────────────────────────────
+
+def build_sauce_block(sauce: SauceRecord, file_size: int,
+                      columns: int, rows: int) -> bytes:
+    """Serialise a SauceRecord to 128 bytes."""
+    def pad(s: str, n: int) -> bytes:
+        return s.encode('cp437', errors='replace')[:n].ljust(n, b'\x00')
+
+    if not sauce.date:
+        sauce.date = datetime.date.today().strftime('%Y%m%d')
+    if not sauce.t_info1:
+        sauce.t_info1 = columns
+    if not sauce.t_info2:
+        sauce.t_info2 = rows
+
+    block = bytearray()
+    block += b'SAUCE'
+    block += b'00'
+    block += pad(sauce.title,  35)
+    block += pad(sauce.author, 20)
+    block += pad(sauce.group,  20)
+    block += pad(sauce.date,    8)
+    block += file_size.to_bytes(4, 'little')
+    block += bytes([1])                         # DataType: Character
+    block += bytes([1])                         # FileType: ANSi
+    block += sauce.t_info1.to_bytes(2, 'little')
+    block += sauce.t_info2.to_bytes(2, 'little')
+    block += (0).to_bytes(2, 'little')          # TInfo3
+    block += (0).to_bytes(2, 'little')          # TInfo4
+    block += bytes([len(sauce.comments)])
+    block += bytes([sauce.t_flags])
+    block += pad(sauce.t_info_s, 22)
+    assert len(block) == 128
+    return bytes(block)
+
+def build_comment_block(comments: List[str]) -> bytes:
+    if not comments:
+        return b''
+    block = bytearray(b'COMNT')
+    for c in comments:
+        block += c.encode('cp437', errors='replace')[:64].ljust(64, b'\x00')
+    return bytes(block)
+
+def rebuild_sauce(fields: Dict[str, str]) -> SauceRecord:
+    """Reconstruct a SauceRecord from a {label: text} dict."""
+    s = SauceRecord()
+    s.title  = fields.get('Title',  '')
+    s.author = fields.get('Author', '')
+    s.group  = fields.get('Group',  '')
+    s.date   = fields.get('Date',   '') or datetime.date.today().strftime('%Y%m%d')
+    dim = fields.get('Dimensions', '')
+    if 'x' in dim:
         try:
-            columns = int(sys.argv[3])
+            w, h = dim.split('x')
+            s.t_info1 = int(w)
+            s.t_info2 = int(h)
         except ValueError:
             pass
-    
-    if '--icecolors' in sys.argv:
-        icecolors = True
-    
-    if '--vga-colors' in sys.argv:
-        vga_colors = True
-    
-    if '--amiga' in sys.argv:
-        encoding = 'iso8859-1'
-    elif '--utf8' in sys.argv:
-        encoding = 'utf-8'
-    elif '--pc' in sys.argv:
-        encoding = 'cp437'
-    
-    ans_to_ddw(input_path, output_path, columns=columns, icecolors=icecolors, encoding=encoding, vga_colors=vga_colors)
-
-if __name__ == '__main__':
-    main()
+    flags_str = fields.get('Flags', '')
+    if flags_str:
+        for part in flags_str.split(','):
+            part = part.strip()
+            if part == 'non-blink':
+                s.t_flags |= 0x01
+            elif part.startswith('letter-spacing:'):
+                try:
+                    s.t_flags |= (int(part.split(':')[1]) & 0x3) << 1
+                except ValueError:
+                    pass
+            elif part.startswith('aspect-ratio:'):
+                try:
+                    s.t_flags |= (int(part.split(':')[1]) & 0x3) << 3
+                except ValueError:
+                    pass
+    s.t_info_s = fields.get('Font', '')
+    i = 1
+    while f'Comment {i}' in fields:
+        s.comments.append(fields[f'Comment {i}'])
+        i += 1
+    return s

@@ -1,38 +1,52 @@
-import json
-import io
 from visidata import VisiData, vd
 
-from .ddw2ans import load_ddw_rows, render_ansi, build_sauce_block, build_comment_block
-
-# ── Options (mirrors load_ans.py) ─────────────────────────────────────────────
-vd.option('ans_columns',    80,      'width in characters for ANSI files')
-vd.option('ans_icecolors',  False,   'enable iCE colors (blinking -> bright backgrounds)')
-vd.option('ans_encoding',   'cp437', 'character encoding: cp437/dos, iso8859-1/amiga, or utf-8')
-vd.option('ans_vga_colors', False,   'convert SGR color codes to VGA palette when importing .ans files')
-# Save-only options
-vd.option('ans_256color',   False,   'emit xterm 256-color SGR sequences when saving .ans files')
-vd.option('ans_truecolor',  False,   'emit 24-bit RGB SGR sequences (38;2;r;g;b) when saving .ans files')
-vd.option('ans_sauce',      True,    'write SAUCE record when saving .ans files')
+from .ansi import (
+    parse_color_string, DdwChar, render_ansi,
+    build_sauce_block, build_comment_block, rebuild_sauce,
+    resolve_encoding,
+)
 
 @VisiData.api
 def save_ans(vd, p, vs):
-    """Save a DrawingSheet as an ANSI .ans file."""
-    rows_jsonl = '\n'.join(json.dumps(r) for r in vs.rows) + '\n'
-    chars, sauce = load_ddw_rows(io.StringIO(rows_jsonl))
+    """Save a DrawingSheet as an ANSI .ans file, exporting only base-frame rows."""
+    chars = []
+    sauce_fields = {}
 
-    cols        = vd.options.ans_columns
-    ice         = vd.options.ans_icecolors
-    use_256     = vd.options.ans_256color
-    use_true    = vd.options.ans_truecolor
-    do_sauce    = vd.options.ans_sauce
+    for row in vs.rows:
+        frame = row.get('frame', '') or ''
+        typ = row.get('type', '') or ''
+        text = row.get('text', '') or ''
 
-    enc_input = vd.options.ans_encoding.lower()
-    if enc_input == 'dos':
-        enc = 'cp437'
-    elif enc_input == 'amiga':
-        enc = 'iso8859-1'
-    else:
-        enc = enc_input
+        if not text:
+            continue
+
+        # Collect SAUCE metadata
+        if frame == 'SAUCE record':
+            sauce_fields[typ] = text
+            continue
+
+        # Skip non-base-frame rows (animation frames, frame markers)
+        if frame or typ:
+            continue
+
+        chars.append(DdwChar(
+            x=int(row.get('x', 0) or 0),
+            y=int(row.get('y', 0) or 0),
+            text=text,
+            color=parse_color_string(row.get('color', '') or ''),
+        ))
+
+    if not chars:
+        vd.fail('Drawing is animation; cannot export as ANSI.')
+
+    sauce = rebuild_sauce(sauce_fields) if sauce_fields else None
+
+    cols     = vd.options.ans_columns
+    ice      = vd.options.ans_icecolors
+    use_256  = vd.options.ans_256color
+    use_true = vd.options.ans_truecolor
+    do_sauce = vd.options.ans_sauce
+    enc      = resolve_encoding(vd.options.ans_encoding)
 
     ansi_bytes = render_ansi(chars, columns=cols,
                              use_256color=use_256, icecolors=ice,

@@ -1,34 +1,29 @@
 import json
 import io
+
 from visidata import VisiData, Path, vd
 from . import DrawingSheet
-from .ans2ddw import AnsiParser
+from .ansi import AnsiParser, parse_sauce, resolve_encoding
 
-# Define global options
+# All .ans options (load and save)
 vd.option('ans_columns', 80, 'width in characters for ANSI files')
 vd.option('ans_icecolors', False, 'enable iCE colors (blinking -> bright backgrounds)')
 vd.option('ans_encoding', 'cp437', 'character encoding: cp437/dos, iso8859-1/amiga, or utf-8')
 vd.option('ans_vga_colors', False, 'convert SGR color codes to VGA palette when importing .ans files')
 vd.option('ans_ignore_sauce', False, 'ignore SAUCE record for columns and iCE colors; use vd options instead')
+vd.option('ans_256color', False, 'emit xterm 256-color SGR sequences when saving .ans files')
+vd.option('ans_truecolor', False, 'emit 24-bit RGB SGR sequences (38;2;r;g;b) when saving .ans files')
+vd.option('ans_sauce', True, 'write SAUCE record when saving .ans files')
 
 @VisiData.api
 def open_ans(vd, p):
-    from .ans2ddw import parse_sauce
-
     data = p.read_bytes()
     file_data, sauce = parse_sauce(data)
 
-    enc_input = vd.options.ans_encoding.lower()
-    if enc_input == 'dos':
-        enc = 'cp437'
-    elif enc_input == 'amiga':
-        enc = 'iso8859-1'
-    else:
-        enc = enc_input
-
+    enc = resolve_encoding(vd.options.ans_encoding)
     ignore_sauce = vd.options.ans_ignore_sauce
 
-    # Infer encoding from SAUCE font name unless overridden by the user option.
+    # Infer encoding from SAUCE font name unless overridden
     if not ignore_sauce and sauce and sauce.t_info_s.startswith('Amiga'):
         enc = 'iso8859-1'
 
