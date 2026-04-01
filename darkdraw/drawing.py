@@ -11,13 +11,13 @@ from visidata import dispwidth, CharBox, boundingBox, asyncthread
 from visidata.bezier import bezier
 import visidata.cliptext as _cliptext
 
-# Patch VisiData's _dispch to not replace modifier letters (e.g. U+1D2C-U+1D61)
+# Patch VisiData's _dispch to not replace modifier characters (Lm, Sk)
 # with placeholders. They are legitimate drawing characters in a terminal art tool.
 _orig_dispch = _cliptext._dispch.__wrapped__
 @functools.lru_cache(maxsize=100000)
 def _ddw_dispch(c, oddspacech=None, combch=None, modch=None):
     ccat = unicodedata.category(c)
-    if ccat == 'Lm':
+    if ccat in ('Lm', 'Sk'):
         return c, dispwidth(c, literal=True)
     return _orig_dispch(c, oddspacech=oddspacech, combch=combch, modch=modch)
 _cliptext._dispch = _ddw_dispch
