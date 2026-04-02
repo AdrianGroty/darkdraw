@@ -78,6 +78,26 @@ def open_dur(vd, p):
                         )
                 rows.append(d)
 
+    frame_ids = {r['id'] for r in rows if r.get('type') == 'frame'}
+    frame_rows = [r for r in rows if r.get('type') == 'frame']
+
+    # Merge duplicate elements across frames
+    merged = {}  # (x, y, text, color) -> set of frame ids
+    for r in rows:
+        if r.get('type') == 'frame':
+            continue
+        key = (r['x'], r['y'], r['text'], r['color'])
+        merged.setdefault(key, set()).add(r['frame'])
+
+    element_rows = []
+    for (x, y, text, color), frames in merged.items():
+        d = dict(x=x, y=y, text=text, color=color)
+        if frames != frame_ids:
+            d['frame'] = ' '.join(sorted(frames, key=int))
+        element_rows.append(d)
+
+    rows = frame_rows + element_rows
+
     ddwoutput = '\n'.join(json.dumps(r) for r in rows) + '\n'
 
     return DrawingSheet(p.name, source=Path(str(p.with_suffix('.ddw')), fptext=io.StringIO(ddwoutput))).drawing
