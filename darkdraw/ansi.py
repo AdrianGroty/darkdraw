@@ -413,11 +413,20 @@ class AnsiParser:
             bg24 = self.background24
             fg24 = self.foreground24
 
+        # iCE colors: the blink bit is repurposed as "use high bg".
+        # Emit high bg and strip blink so it doesn't show as an attribute.
+        if self.icecolors and self.blink:
+            if bg24 == 0 and bg < 8:
+                bg += 8
+            blink_out = False
+        else:
+            blink_out = self.blink
+
         self.chars.append(AnsiChar(
             column=self.column, row=self.row, background=bg, foreground=fg,
             background24=bg24, foreground24=fg24, character=char,
             bold=self.bold, italic=self.italic, underline=self.underline,
-            blink=self.blink, reverse=self.invert, dim=self.dim
+            blink=blink_out, reverse=self.invert, dim=self.dim
         ))
 
         self.column += 1
@@ -538,17 +547,12 @@ class AnsiParser:
                 if val == 1:
                     self.foreground = (self.foreground % 8) + 8
                     self.foreground24 = 0
-                elif val == 5 and self.icecolors:
-                    self.background = (self.background % 8) + 8
-                    self.blink = False
 
             elif val in ATTR_OFF:
                 for attr in ATTR_OFF[val]:
                     setattr(self, attr, False)
                 if val == 22 and self.foreground >= 8:
                     self.foreground -= 8
-                elif val == 25 and self.icecolors and self.background >= 8:
-                    self.background -= 8
 
             elif 30 <= val <= 37:
                 self.foreground = val - 30 + (8 if self.bold else 0)
@@ -558,7 +562,7 @@ class AnsiParser:
                 self.foreground24 = 0
 
             elif 40 <= val <= 47:
-                self.background = val - 40 + (8 if self.blink and self.icecolors else 0)
+                self.background = val - 40
                 self.background24 = 0
             elif 100 <= val <= 107:
                 self.background = val - 92
