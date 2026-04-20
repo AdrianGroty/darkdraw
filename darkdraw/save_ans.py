@@ -48,6 +48,14 @@ def save_ans(vd, p, vs):
     do_sauce = vd.options.ans_sauce
     enc      = resolve_encoding(vd.options.ans_encoding)
 
+    # Infer output params from SAUCE unless user overrides
+    if sauce and not vd.options.ans_ignore_sauce:
+        if sauce.t_info1:
+            cols = sauce.t_info1
+        ice = bool(sauce.t_flags & 0x01)
+        if sauce.t_info_s.startswith('Amiga'):
+            enc = 'iso8859-1'
+
     ansi_bytes = render_ansi(chars, columns=cols,
                              use_256color=use_256, icecolors=ice,
                              use_truecolor=use_true, encoding=enc)
@@ -57,7 +65,7 @@ def save_ans(vd, p, vs):
         f.write(bytes([26]))
 
         if do_sauce and sauce:
-            file_size     = len(ansi_bytes) + 1
+            file_size     = len(ansi_bytes)
             comment_block = build_comment_block(sauce.comments)
             sauce_block   = build_sauce_block(
                 sauce, file_size,

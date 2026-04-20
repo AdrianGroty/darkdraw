@@ -9,6 +9,18 @@ from copy import copy, deepcopy
 from visidata import *
 from visidata import dispwidth, CharBox, boundingBox, asyncthread
 from visidata.bezier import bezier
+import visidata.cliptext as _cliptext
+
+# Patch VisiData's _dispch to not replace modifier characters (Lm, Sk)
+# with placeholders. They are legitimate drawing characters in a terminal art tool.
+_orig_dispch = _cliptext._dispch.__wrapped__
+@functools.lru_cache(maxsize=100000)
+def _ddw_dispch(c, oddspacech=None, combch=None, modch=None):
+    ccat = unicodedata.category(c)
+    if ccat in ('Lm', 'Sk'):
+        return c, dispwidth(c, literal=True)
+    return _orig_dispch(c, oddspacech=oddspacech, combch=combch, modch=modch)
+_cliptext._dispch = _ddw_dispch
 
 
 vd.allPrefixes += list('01')
@@ -800,7 +812,9 @@ class Drawing(TextCanvas):
                 if oldr.color and newx < box.x2 and newy < box.y2-1:
                     for existing in self._displayedRows[(newx, newy)][-(n or 0):]:
                         npasted += 1
+                        oldcolor = existing.color
                         existing.color = oldr.color
+                        vd.addUndo(setattr, existing, 'color', oldcolor)
 
         if npasted == 0:
             vd.warning(f'paste mode {self.paste_mode} had nothing to paste')
@@ -872,6 +886,15 @@ def set_color(self, color, rows):
         oldcolor = copy(r.color)
         r.color = color
         vd.addUndo(setattr, r, 'color', oldcolor)
+
+@Drawing.api
+def generate_sauce(sheet):
+    from .ansi import default_sauce_rows
+    maxX, maxY = sheet.maxXY
+    sheet.source.deleteBy(lambda r: (r.get('frame') or '') == 'SAUCE record')
+    for i, r in enumerate(default_sauce_rows(maxX, maxY)):
+        sheet.source.addRow(AttrDict(r), index=i)
+    vd.status(f'SAUCE record generated ({maxX+1}x{maxY+1})')
 
 @Drawing.api
 def select_top(sheet, box):
@@ -1159,6 +1182,8 @@ Drawing.bindkey('C', 'open-colors')
 Drawing.unbindkey('Ctrl+R')
 
 BaseSheet.addCommand(None, 'open-tutorial-darkdraw', 'vd.push(openSource(Drawing.tutorial_url))', 'Download and open DarkDraw tutorial as a DarkDraw sheet')
+Drawing.addCommand(None, 'generate-sauce', 'sheet.generate_sauce()', 'generate SAUCE metadata rows for current drawing')
+
 Drawing.addCommand('.', 'next-point', 'next_point(cursorBox.x1, cursorBox.y1)', '')
 Drawing.addCommand('w', 'line-drawing-mode', 'set_linedraw_mode()', '')
 Drawing.addCommand('BUTTON1_PRESSED', 'click-cursor', 'click(mouseX, mouseY)', 'start cursor box with left mouse button press')
@@ -1171,6 +1196,7 @@ vd.addMenuItems('''
     Help > DarkDraw tutorial > open-tutorial-darkdraw
     Edit > Add text > add-input
     DarkDraw > New drawing > new-drawing
+    DarkDraw > View > Transparent background > toggle-transparent-bg
     DarkDraw > View > Colors sheet > open-colors
     DarkDraw > View > Unicode characters > open-unicode
     DarkDraw > View > Backing table > open-backing
