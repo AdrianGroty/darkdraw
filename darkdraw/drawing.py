@@ -9,18 +9,6 @@ from copy import copy, deepcopy
 from visidata import *
 from visidata import dispwidth, CharBox, boundingBox, asyncthread
 from visidata.bezier import bezier
-import visidata.cliptext as _cliptext
-
-# Patch VisiData's _dispch to not replace modifier characters (Lm, Sk)
-# with placeholders. They are legitimate drawing characters in a terminal art tool.
-_orig_dispch = _cliptext._dispch.__wrapped__
-@functools.lru_cache(maxsize=100000)
-def _ddw_dispch(c, oddspacech=None, combch=None, modch=None):
-    ccat = unicodedata.category(c)
-    if ccat in ('Lm', 'Sk'):
-        return c, dispwidth(c, literal=True)
-    return _orig_dispch(c, oddspacech=oddspacech, combch=combch, modch=modch)
-_cliptext._dispch = _ddw_dispch
 
 
 vd.allPrefixes += list('01')
@@ -812,9 +800,7 @@ class Drawing(TextCanvas):
                 if oldr.color and newx < box.x2 and newy < box.y2-1:
                     for existing in self._displayedRows[(newx, newy)][-(n or 0):]:
                         npasted += 1
-                        oldcolor = existing.color
                         existing.color = oldr.color
-                        vd.addUndo(setattr, existing, 'color', oldcolor)
 
         if npasted == 0:
             vd.warning(f'paste mode {self.paste_mode} had nothing to paste')
@@ -1196,7 +1182,6 @@ vd.addMenuItems('''
     Help > DarkDraw tutorial > open-tutorial-darkdraw
     Edit > Add text > add-input
     DarkDraw > New drawing > new-drawing
-    DarkDraw > View > Transparent background > toggle-transparent-bg
     DarkDraw > View > Colors sheet > open-colors
     DarkDraw > View > Unicode characters > open-unicode
     DarkDraw > View > Backing table > open-backing
