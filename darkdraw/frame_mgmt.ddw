@@ -1,0 +1,54 @@
+{"id": "0", "type": "frame", "x": null, "y": null, "text": "", "color": "", "tags": [], "group": "", "frame": null, "rows": null, "duration_ms": 100, "ref": null}
+{"id": "1", "type": "frame", "text": "", "color": "", "tags": [], "group": "", "duration_ms": 100}
+{"id": "2", "type": "frame", "text": "", "color": "", "tags": [], "group": "", "duration_ms": 100}
+{"id": "3", "type": "frame", "text": "", "color": "", "tags": [], "group": "", "duration_ms": 100}
+{"id": "4", "type": "frame", "text": "", "color": "", "tags": [], "group": "", "duration_ms": 100}
+{"x": 3, "y": 1, "text": "frame_mgmt.py", "color": "14", "tags": [], "group": "", "frame": ""}
+{"x": 33, "y": 3, "text": "Frame ID Linking", "color": "13", "tags": [], "group": "", "frame": "0"}
+{"x": 3, "y": 5, "text": "In the backing sheet, changes to the id value of a frame object are propagated", "color": "", "tags": [], "group": "", "frame": "0"}
+{"x": 3, "y": 6, "text": "to all text objects referencing that frame id, but not the other way around.", "color": "", "tags": [], "group": "", "frame": "0"}
+{"x": 3, "y": 7, "text": "Open a second pane (Z), and open the backing sheet there (`). Edit (e) the", "color": "", "tags": [], "group": "", "frame": "0"}
+{"x": 3, "y": 8, "text": "id field of the first item in the backing sheet, type TEST (or anything but 0)", "color": "", "tags": [], "group": "", "frame": "0"}
+{"x": 3, "y": 9, "text": "and confirm the edit (Enter). The frame values of all objects on this frame", "color": "", "tags": [], "group": "", "frame": "0"}
+{"x": 3, "y": 10, "text": "have changed to match the new frame id. Editing the frame value of these objects", "color": "", "tags": [], "group": "", "frame": "0"}
+{"x": 3, "y": 11, "text": "will not affect the frame's id value.", "color": "", "tags": [], "group": "", "frame": "0"}
+{"x": 23, "y": 7, "text": "Z", "color": "11", "tags": [], "group": "", "frame": "0"}
+{"x": 61, "y": 7, "text": "`", "color": "11", "tags": [], "group": "", "frame": "0"}
+{"x": 71, "y": 7, "text": "e", "color": "11", "tags": [], "group": "", "frame": "0"}
+{"x": 25, "y": 9, "text": "Enter", "color": "11", "tags": [], "group": "", "frame": "0"}
+{"x": 31, "y": 14, "text": "to duplicate-frame ]", "color": "10", "tags": [], "group": "", "frame": "0"}
+{"x": 30, "y": 3, "text": "duplicate-frame", "color": "13", "tags": [], "group": "", "frame": "1"}
+{"x": 3, "y": 5, "text": "In the canvas, press gz] to create a copy of the current frame.", "color": "", "tags": [], "group": "", "frame": "1"}
+{"x": 24, "y": 5, "text": "gz]", "color": "11", "tags": [], "group": "", "frame": "1"}
+{"x": 27, "y": 14, "text": "to combine-duplicates ]", "color": "10", "tags": [], "group": "", "frame": "1"}
+{"x": 33, "y": 3, "text": "combine-duplicates", "color": "13", "tags": [], "group": "", "frame": "2"}
+{"x": 3, "y": 6, "text": "Press Space, and enter command longname combine-duplicates.", "color": "", "tags": [], "group": "", "frame": "2"}
+{"x": 3, "y": 7, "text": "The duplicated items on the previous frame/the new copy are now combined", "color": "", "tags": [], "group": "", "frame": "2"}
+{"x": 3, "y": 8, "text": "into single items with two frame ids.", "color": "", "tags": [], "group": "", "frame": "2"}
+{"x": 3, "y": 5, "text": "Identical objects on multiple frames can be combined to declutter the backing sheet.", "color": "", "tags": [], "group": "", "frame": "2"}
+{"x": 9, "y": 6, "text": "Space", "color": "11", "tags": [], "group": "", "frame": "2"}
+{"x": 43, "y": 6, "text": "combine-duplicates", "color": "11", "tags": [], "group": "", "frame": "2"}
+{"x": 30, "y": 14, "text": "to self-contain-frames ]", "color": "10", "tags": [], "group": "", "frame": "2"}
+{"x": 26, "y": 3, "text": "self-contain-frames", "color": "13", "tags": [], "group": "", "frame": "3"}
+{"x": 3, "y": 5, "text": "The opposite can also be done, to prevent edits on a given frame", "color": "", "tags": [], "group": "", "frame": "3"}
+{"x": 3, "y": 6, "text": "from affecting the contents of other frames.", "color": "", "tags": [], "group": "", "frame": "3"}
+{"x": 3, "y": 7, "text": "Enter command longname self-contain-frames.", "color": "", "tags": [], "group": "", "frame": "3"}
+{"x": 3, "y": 8, "text": "The multi-frame objects created from frame 1 have again", "color": "", "tags": [], "group": "", "frame": "3"}
+{"x": 3, "y": 9, "text": "become separate single-frame objects", "color": "", "tags": [], "group": "", "frame": "3"}
+{"x": 26, "y": 7, "text": "self-contain-frames", "color": "11", "tags": [], "group": "", "frame": "3"}
+{"x": 19, "y": 14, "text": "to delete-orphan-frame-elements ]", "color": "10", "tags": [], "group": "", "frame": "3"}
+{"x": 21, "y": 3, "text": "delete-orphan-frame-elements", "color": "13", "tags": [], "group": "", "frame": "4"}
+{"x": 3, "y": 6, "text": "In the backing sheet, delete ONLY the frame object for frame 1-2.", "color": "", "tags": [], "group": "", "frame": "4"}
+{"x": 3, "y": 7, "text": "Then, enter command longname delete-orphan-frame-elements.", "color": "", "tags": [], "group": "", "frame": "4"}
+{"x": 3, "y": 8, "text": "The text objects from frame 1-2 have been pruned.", "color": "", "tags": [], "group": "", "frame": "4"}
+{"x": 3, "y": 5, "text": "Objects that are unused by any frame can be trimmed, all at once.", "color": "", "tags": [], "group": "", "frame": "4"}
+{"x": 64, "y": 6, "text": "1-2", "color": "11", "tags": [], "group": "", "frame": "4"}
+{"x": 32, "y": 7, "text": "delete-orphan-frame-elements", "color": "11", "tags": [], "group": "", "frame": "4"}
+{"x": 31, "y": 8, "text": "1-2", "color": "11", "tags": [], "group": "", "frame": "4"}
+{"x": 32, "y": 10, "text": "__", "color": "9", "tags": [], "group": "", "frame": "4"}
+{"x": 31, "y": 11, "text": "/_'  _/", "color": "9", "tags": [], "group": "", "frame": "4"}
+{"x": 30, "y": 12, "text": "/_,/)(/o", "color": "9", "tags": [], "group": "", "frame": "4"}
+{"x": 3, "y": 6, "text": "(gz[ would also work, but later steps in this tutorial assume that you", "color": "", "tags": [], "group": "", "frame": "1"}
+{"x": 3, "y": 7, "text": "will have pressed gz] here.)", "color": "", "tags": [], "group": "", "frame": "1"}
+{"x": 4, "y": 6, "text": "gz[", "color": "11", "tags": [], "group": "", "frame": "1"}
+{"x": 21, "y": 7, "text": "gz]", "color": "11", "tags": [], "group": "", "frame": "1"}
