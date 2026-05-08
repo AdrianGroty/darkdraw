@@ -36,10 +36,25 @@ def duplicate_frame(sheet, before=False):
     cur = src.frames[sheet.cursorFrameIndex]
     if before:
         adj = src.frames[sheet.cursorFrameIndex-1] if sheet.cursorFrameIndex > 0 else None
-        name = (str(adj.id)+'-'+str(cur.id)) if adj else str(int(cur.id)-1)
+        if adj:
+            base = str(adj.id)+'-'+str(cur.id)
+        else:
+            try: base = str(int(cur.id)-1)
+            except ValueError: base = f'{cur.id}-pre'
     else:
         adj = src.frames[sheet.cursorFrameIndex+1] if sheet.cursorFrameIndex+1 < len(src.frames) else None
-        name = (str(cur.id)+'-'+str(adj.id)) if adj else str(int(cur.id)+1)
+        if adj:
+            base = str(cur.id)+'-'+str(adj.id)
+        else:
+            try: base = str(int(cur.id)+1)
+            except ValueError: base = f'{cur.id}-post'
+
+    existing = {r.id for r in src.rows if r.type == 'frame'}
+    name = base
+    i = 2
+    while name in existing:
+        name = f'{base}-{i}'
+        i += 1
 
     newf = src.newRow()
     newf.type = 'frame'
