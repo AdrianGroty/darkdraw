@@ -19,6 +19,10 @@
 {"x": 31, "y": 14, "text": "to duplicate-frame ]", "color": "10", "tags": [], "group": "", "frame": "0"}
 {"x": 30, "y": 3, "text": "duplicate-frame", "color": "13", "tags": [], "group": "", "frame": "1"}
 {"x": 3, "y": 5, "text": "In the canvas, press gz] to create a copy of the current frame.", "color": "", "tags": [], "group": "", "frame": "1"}
+{"x": 3, "y": 6, "text": "(gz[ would also work, but later steps in this tutorial assume that you", "color": "", "tags": [], "group": "", "frame": "1"}
+{"x": 3, "y": 7, "text": "will have pressed gz] here.)", "color": "", "tags": [], "group": "", "frame": "1"}
+{"x": 4, "y": 6, "text": "gz[", "color": "11", "tags": [], "group": "", "frame": "1"}
+{"x": 21, "y": 7, "text": "gz]", "color": "11", "tags": [], "group": "", "frame": "1"}
 {"x": 24, "y": 5, "text": "gz]", "color": "11", "tags": [], "group": "", "frame": "1"}
 {"x": 27, "y": 14, "text": "to combine-duplicates ]", "color": "10", "tags": [], "group": "", "frame": "1"}
 {"x": 33, "y": 3, "text": "combine-duplicates", "color": "13", "tags": [], "group": "", "frame": "2"}
@@ -48,7 +52,3 @@
 {"x": 32, "y": 10, "text": "__", "color": "9", "tags": [], "group": "", "frame": "4"}
 {"x": 31, "y": 11, "text": "/_'  _/", "color": "9", "tags": [], "group": "", "frame": "4"}
 {"x": 30, "y": 12, "text": "/_,/)(/o", "color": "9", "tags": [], "group": "", "frame": "4"}
-{"x": 3, "y": 6, "text": "(gz[ would also work, but later steps in this tutorial assume that you", "color": "", "tags": [], "group": "", "frame": "1"}
-{"x": 3, "y": 7, "text": "will have pressed gz] here.)", "color": "", "tags": [], "group": "", "frame": "1"}
-{"x": 4, "y": 6, "text": "gz[", "color": "11", "tags": [], "group": "", "frame": "1"}
-{"x": 21, "y": 7, "text": "gz]", "color": "11", "tags": [], "group": "", "frame": "1"}
