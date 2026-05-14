@@ -44,7 +44,10 @@ def open_ans(vd, p):
 
     rows = []
     if sauce:
+        spacer = {'id': '-', 'type': '-', 'text': '-', 'x': 0, 'y': 0, 'frame': '-'}
+        rows.append(dict(spacer))
         rows.extend(sauce.sauce_to_rows())
+        rows.append(dict(spacer))
     rows.extend([char.to_ddw_row(vga_colors=vga) for char in chars])
 
     ddwoutput = '\n'.join(json.dumps(r) for r in rows) + '\n'
