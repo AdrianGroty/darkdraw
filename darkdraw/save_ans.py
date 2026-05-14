@@ -21,7 +21,7 @@ def save_ans(vd, p, vs):
             continue
 
         # Collect SAUCE metadata
-        if frame == 'SAUCE record':
+        if frame == 'SAUCE_record':
             sauce_fields[typ] = text
             continue
 

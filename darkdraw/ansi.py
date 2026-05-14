@@ -192,10 +192,43 @@ class SauceRecord:
             {
                 "type": label, "x": 0, "y": y, "text": text,
                 "color": "", "tags": [], "group": "",
-                "frame": "SAUCE record", "id": "", "rows": []
+                "frame": "SAUCE_record", "id": "", "rows": []
             }
             for y, (text, label) in enumerate((text, label) for text, label in fields if text)
         ]
+
+def default_sauce_rows(maxX: int, maxY: int) -> List[dict]:
+    """Build default SAUCE record rows for a drawing with given bounds.
+
+    Title/Author/Group/Flags/Comment filled with whitespace placeholders.
+    Date auto-filled to today. Dimensions = (maxX+1)x(maxY+1). Font = IBM VGA.
+    """
+    sauce = SauceRecord(
+        title=" ",
+        author=" ",
+        group=" ",
+        date=datetime.date.today().strftime('%Y%m%d'),
+        t_info1=maxX + 1,
+        t_info2=maxY + 1,
+        t_flags=0,
+        t_info_s=" ",
+        comments=[" "],
+    )
+    rows = sauce.sauce_to_rows()
+    # Insert a whitespace Flags row (sauce_to_rows only emits Flags when t_flags truthy)
+    flags_row = {
+        "type": "Flags", "x": 0, "y": 0, "text": " ",
+        "color": "", "tags": [], "group": "",
+        "frame": "SAUCE_record", "id": "", "rows": []
+    }
+    # Place Flags after Font (matches sauce_to_rows ordering: Title,Author,Group,Date,Dimensions,Flags,Font,Comments)
+    # sauce_to_rows skipped Flags because t_flags==0; re-inject before Font to preserve order
+    insert_at = next((i for i, r in enumerate(rows) if r["type"] == "Font"), len(rows))
+    rows.insert(insert_at, flags_row)
+    for i, r in enumerate(rows):
+        r["y"] = i
+    return rows
+
 
 def parse_sauce(data: bytes) -> Tuple[bytes, Optional[SauceRecord]]:
     """Parse SAUCE record from end of file data."""
@@ -346,7 +379,7 @@ class AnsiParser:
                     self.row += 1
                     self.column = 0
                 elif cursor == CR:
-                    pass
+                    self.column = 0
                 elif cursor == TAB:
                     self.column += 8
                 elif cursor == SUB:
@@ -725,10 +758,10 @@ def xterm256_to_ansi16(color: int) -> int:
     return best
 
 def ansi16_to_sgr_fg(c: int) -> int:
-    return (c - 8 + 90) if c >= 8 else (c + 30)
+    return (c - 8) + 30 if c >= 8 else c + 30
 
 def ansi16_to_sgr_bg(c: int) -> int:
-    return (c - 8 + 100) if c >= 8 else (c + 40)
+    return (c - 8) + 40 if c >= 8 else c + 40
 
 def index_to_rgb(color: int) -> Tuple[int, int, int]:
     """xterm-256 index -> (r, g, b)."""
@@ -751,17 +784,29 @@ def build_sgr(pc: ParsedColor, prev: Optional[ParsedColor],
         params.append(0)
         prev = ParsedColor()
 
+    use_indexed = not (use_truecolor or use_256color)
+    fg16 = xterm256_to_ansi16(pc.fg) if use_indexed else -1
+    bg16 = xterm256_to_ansi16(pc.bg) if use_indexed else -1
+    prev_fg16 = xterm256_to_ansi16(prev.fg) if use_indexed else -1
+    prev_bg16 = xterm256_to_ansi16(prev.bg) if use_indexed else -1
+
+    # Fold brightness into bold (fg) and blink (bg) for classic ANSI-art compatibility.
+    eff_bold  = pc.bold  or (use_indexed and fg16 >= 8)
+    eff_blink = pc.blink or (use_indexed and bg16 >= 8)
+    prev_eff_bold  = prev.bold  or (use_indexed and prev_fg16 >= 8)
+    prev_eff_blink = prev.blink or (use_indexed and prev_bg16 >= 8)
+
     def toggle(cur, prv, on_code, off_code):
         if cur and not prv:
             params.append(on_code)
         elif not cur and prv:
             params.append(off_code)
 
-    toggle(pc.bold,      prev.bold,      1, 22)
+    toggle(eff_bold,     prev_eff_bold,  1, 22)
     toggle(pc.dim,       prev.dim,       2, 22)
     toggle(pc.italic,    prev.italic,    3, 23)
     toggle(pc.underline, prev.underline, 4, 24)
-    toggle(pc.blink,     prev.blink,     5, 25)
+    toggle(eff_blink,    prev_eff_blink, 5, 25)
     toggle(pc.reverse,   prev.reverse,   7, 27)
 
     if pc.fg != prev.fg:
@@ -771,7 +816,7 @@ def build_sgr(pc: ParsedColor, prev: Optional[ParsedColor],
         elif use_256color:
             params += [38, 5, pc.fg]
         else:
-            params.append(ansi16_to_sgr_fg(xterm256_to_ansi16(pc.fg)))
+            params.append(ansi16_to_sgr_fg(fg16))
 
     if pc.bg != prev.bg:
         if use_truecolor:
@@ -780,11 +825,6 @@ def build_sgr(pc: ParsedColor, prev: Optional[ParsedColor],
         elif use_256color:
             params += [48, 5, pc.bg]
         else:
-            bg16 = xterm256_to_ansi16(pc.bg)
-            if bg16 >= 8 and not icecolors:
-                if not pc.blink:
-                    params.append(5)
-                bg16 -= 8
             params.append(ansi16_to_sgr_bg(bg16))
 
     if not params:
@@ -814,24 +854,15 @@ def render_ansi(chars: List[DdwChar], columns: int = 80,
     for ch in chars:
         target_row, target_col = ch.y, ch.x
 
-        if target_row < cur_row:
-            out.append(f'{CSI}{target_row + 1};{target_col + 1}H')
-            cur_row, cur_col = target_row, target_col
-        elif target_row > cur_row:
+        if target_row > cur_row:
             diff = target_row - cur_row
-            if diff == 1:
-                out.append('\r\n')
-            else:
-                out.append(f'\r{CSI}{diff}B')
+            out.append('\r\n' * diff)
             cur_row = target_row
             cur_col = 0
 
         if target_col > cur_col:
             diff = target_col - cur_col
             out.append(f'{CSI}{diff}C')
-            cur_col = target_col
-        elif target_col < cur_col:
-            out.append(f'{CSI}{target_row + 1};{target_col + 1}H')
             cur_col = target_col
 
         sgr = build_sgr(ch.color, prev_color, use_256color, icecolors, use_truecolor)
@@ -841,10 +872,6 @@ def render_ansi(chars: List[DdwChar], columns: int = 80,
 
         out.append(ch.text)
         cur_col += len(ch.text)
-
-        if cur_col >= columns:
-            cur_row += 1
-            cur_col = 0
 
     out.append(f'{CSI}0m')
     return ''.join(out).encode(encoding, errors='replace')
