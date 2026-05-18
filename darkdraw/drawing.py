@@ -8,6 +8,7 @@ import unicodedata
 from copy import copy, deepcopy
 from visidata import *
 from visidata import dispwidth, CharBox, boundingBox, asyncthread
+from visidata.bezier import bezier
 
 
 vd.allPrefixes += list('01')
@@ -57,6 +58,16 @@ def any_match(G1, G2):
         for g in G1:
             if g in G2: return True
 
+class FramesSheet(Sheet):
+    rowtype='frames'  # rowdef: { .type, .id, .duration_ms, .x, .y }
+    columns = [
+        ItemColumn('type', width=0),
+        ItemColumn('id'),
+        ItemColumn('duration_ms', type=int),
+        ItemColumn('x', type=int),
+        ItemColumn('y', type=int),
+    ]
+
 class DrawingSheet(JsonSheet):
     rowtype='elements'  # rowdef: { .type, .x, .y, .text, .color, .group, .tags='', .frame, .id, .rows=[] }
     columns=[
@@ -89,6 +100,9 @@ class DrawingSheet(JsonSheet):
         return Drawing(self.name+".ddw", source=self)
 
     def addRow(self, row, **kwargs):
+        # back-compat: legacy .ddw files stored tags as a JSON list; normalize to space-separated string
+        if isinstance(row.get('tags'), list):
+            row['tags'] = ' '.join(row['tags'])
         assert not any(row is r for r in self.rows), 'duplicate row reference'  #61: remove when fixed
         row = super().addRow(row, **kwargs)
         vd.addUndo(self.rows.remove, row)
@@ -136,6 +150,53 @@ class DrawingSheet(JsonSheet):
         nr.type = 'group'
         vd.status('created group "%s"' % gname)
         return self.addRow(nr)
+
+    @drawcache_property
+    def frames(self):
+        return [r for r in self.rows if r.type == 'frame']
+
+    @property
+    def nFrames(self):
+        return len(self.frames)
+
+    def new_between_frame(self, fidx1, fidx2):
+        f1 = f2 = None
+        if not self.frames:
+            name = '0'
+        else:
+            if 0 <= fidx1 < len(self.frames):
+                f1 = self.frames[fidx1]
+            if 0 <= fidx2 < len(self.frames):
+                f2 = self.frames[fidx2]
+            if f1 and f2:
+                name = str(f1.id)+'-'+str(f2.id)
+            elif f1:
+                name = str(int(f1.id)+1)
+            elif f2:
+                name = str(int(f2.id)-1)
+
+        newf = self.newRow()
+        newf.type = 'frame'
+        newf.id = name
+        newf.duration_ms = 100
+        if f1:
+            # insert frame just after the first frame in the actual rowset
+            for i, r in enumerate(self.rows):
+                if r is f1:
+                    vd.clearCaches()
+                    self.addRow(newf, index=i+1)
+                    break
+
+            # copy all rows on frame1
+            thisframerows = list(copy(r) for r in self.rows if f1.id in r.frame.split())
+            for r in thisframerows:
+                r.frame = newf.id
+                self.addRow(r)
+            return newf
+        else:
+            vd.clearCaches()
+            return self.addRow(newf, index=0)
+        vd.error('no existing frame ' + str(f1))
 
     def group_selected(self, gname):
         nr = self.create_group(gname)
@@ -271,9 +332,22 @@ class Drawing(TextCanvas):
         x1, y1, x2, y2 = boundingBox(self.selectedRows)
         return CharBox(None, x1, y1, x2-x1, y2-y1)
 
+    @property
+    def currentFrame(self):
+        if self.frames and 0 <= self.cursorFrameIndex < self.nFrames:
+            return self.frames[self.cursorFrameIndex]
+        return AttrDict()
+
     def elements(self, frames=None):
         'Return elements in *frames*.  If *frames* is None, then base image only.  Otherwise, *frames* must be a list of frame rows (like from .currentFrame or .frames).'
         return [r for r in self.rows if self.inFrame(r, frames)]
+
+    def inFrame(self, r, frames):
+        'Return True if *r* is an element that would be displayed (even if hidden or buried) in the given set of *frames*.'
+        if r.type: return False  # frame or other non-element type
+        if not r.frame: return True
+        if not frames: return False
+        return any(f.id in r.frame.split() for f in frames)
 
     def moveToRow(self, rowstr):
         a, b = map(int, rowstr.split())
@@ -302,10 +376,33 @@ class Drawing(TextCanvas):
             vd.exceptionCaught(e)
 
     def draw(self, scr):
+        now = time.time()
         self.autosave()
 #        vd.getHelpPane('darkdraw', module='darkdraw').draw(scr, y=-1, x=-1)
 
-        thisframe = self.handle_autoplay(self.currentFrame)
+        thisframe = self.currentFrame
+        if self.autoplay_frames:
+            vd.timeouts_before_idle = -1
+            ft, f = self.autoplay_frames[0]
+            thisframe = f
+            if not ft:
+                self.autoplay_frames[0][0] = now
+            elif now-ft > f.duration_ms/1000:
+                self.autoplay_frames.pop(0)
+                if self.autoplay_frames:
+                    self.autoplay_frames[0][0] = now
+                    thisframe = self.autoplay_frames[0][1]
+                    vd.curses_timeout = thisframe.duration_ms
+                elif self.loop:
+                    # Reset to frame 0 by repopulating autoplay_frames
+                    self.autoplay_frames = [[0, f] for f in self.frames]
+                    self.cursorFrameIndex = 0
+                    self.autoplay_frames[0][0] = now
+                    thisframe = self.autoplay_frames[0][1]
+                    vd.curses_timeout = thisframe.duration_ms
+                    #vd.status('looped back to frame 0')
+                else:
+                    self.cursorFrameIndex = len(self.frames) - 1
 
         self._displayedRows = defaultdict(list)  # (x, y) -> list of rows; actual screen layout (topmost last in list)
         self._tags = defaultdict(list)  # "tag" -> list of rows with that tag
@@ -422,6 +519,12 @@ class Drawing(TextCanvas):
         x = self.windowWidth-16
         x += clipdraw(scr, y, x, '  %s' % self.cursorBox, defattr)
 
+    def stop_animation(self):
+        self.autoplay_frames = []
+        vd.timeouts_before_idle = 10
+        vd.curses_timeout = 100
+        vd.status('animation stopped')
+
     @asyncthread
     def reload(self):
         self.source.ensureLoaded()
@@ -517,6 +620,19 @@ class Drawing(TextCanvas):
         return '???'
 
     @property
+    def frameDesc(sheet):
+        if not sheet.frames:
+            return ''
+        return f'Frame {sheet.currentFrame.id} {sheet.cursorFrameIndex}/{sheet.nFrames-1}'
+
+    @property
+    def playDesc(sheet):
+        parts = ''
+        if sheet.autoplay_frames: parts += '>'
+        if sheet.loop: parts += '∞'
+        return (parts + ' ') if parts else ''
+
+    @property
     def cursorCharName(self):
         ch = self.cursorChar
         if not ch: return ''
@@ -597,6 +713,8 @@ class Drawing(TextCanvas):
 
     def checkCursor(self):
         # super().checkCursor()
+        self.cursorFrameIndex = max(min(self.cursorFrameIndex, len(self.frames)-1), 0)
+
         self.yoffset = max(0, self.yoffset)
         self.xoffset = max(0, self.xoffset)
         self.cursorBox.y1 = max(0, self.cursorBox.y1)
@@ -613,6 +731,11 @@ class Drawing(TextCanvas):
             self.xoffset = self.cursorBox.x1
         elif self.cursorBox.x1 >= self.xoffset + self.windowWidth-2:
             self.xoffset = self.cursorBox.x1 - self.windowWidth+2
+
+    def join_rows(dwg, rows):
+        vd.addUndo(setattr, rows[0], 'text', rows[0].text)
+        rows[0].text = ''.join(r.text for r in rows)
+        dwg.source.deleteBy(lambda r,rows=rows[1:]: r in rows)
 
     def cycle_paste_mode(self):
         modes = ['all', 'char', 'color']
@@ -690,7 +813,9 @@ class Drawing(TextCanvas):
                 if oldr.color and newx < box.x2 and newy < box.y2-1:
                     for existing in self._displayedRows[(newx, newy)][-(n or 0):]:
                         npasted += 1
+                        oldcolor = existing.color
                         existing.color = oldr.color
+                        vd.addUndo(setattr, existing, 'color', oldcolor)
 
         if npasted == 0:
             vd.warning(f'paste mode {self.paste_mode} had nothing to paste')
@@ -764,6 +889,18 @@ def set_color(self, color, rows):
         vd.addUndo(setattr, r, 'color', oldcolor)
 
 @Drawing.api
+def generate_sauce(sheet):
+    from .ansi import default_sauce_rows
+    maxX, maxY = sheet.maxXY
+    sheet.source.deleteBy(lambda r: (r.get('frame') or '') == 'SAUCE_record')
+    sheet.source.deleteBy(lambda r: r.get('id') == '-' and r.get('type') == '-' and r.get('text') == '-')
+    spacer = {'id': '-', 'type': '-', 'text': '-', 'x': 0, 'y': 0, 'frame': '-'}
+    rows = [dict(spacer)] + default_sauce_rows(maxX, maxY) + [dict(spacer)]
+    for i, r in enumerate(rows):
+        sheet.source.addRow(AttrDict(r), index=i)
+    vd.status(f'SAUCE record generated ({maxX+1}x{maxY+1})')
+
+@Drawing.api
 def select_top(sheet, box):
     r = []
     for x in range(box.x1, box.x2-1):
@@ -783,11 +920,107 @@ def boxchar(vd, ch):
     return AttrDict(x=0, y=0, text=ch, color=vd.default_color)
 
 
+@Drawing.api
+def set_linedraw_mode(sheet):
+    if sheet.mode != 'linedraw':
+        sheet.mode = 'linedraw'
+        sheet.linepoints = []
+    else:
+        sheet.mode = ''
+        sheet.linepoints = []
+
+
+@Drawing.api
+def next_point(sheet, x2, y2):
+    if sheet.linepoints:
+        objs = vd.getClipboardRows()
+        if not objs:
+            r = sheet.newRow()
+            r.text = '.'
+            objs = [r]
+        if len(sheet.linepoints) == 1 or sheet.linepoints[-1] == (x2, y2):
+            sheet.draw_line(objs, *sheet.linepoints[0], x2, y2)
+        else:
+            xy1, xy3 = sheet.linepoints
+            objit = itertools.cycle(objs)
+            # reverse engineered bezier equation to draw with a point *on* the curve
+            ctrlX = 2 * x2 - 0.5 * (xy1[0] + xy3[0])
+            ctrlY = 2 * y2 - 0.5 * (xy1[1] + xy3[1])
+            for x, y in bezier(*xy1, ctrlX, ctrlY, *xy3):
+                sheet.paste_chars([next(objit)], CharBox(None, int(x), int(y), 1, 1))
+
+        sheet.linepoints = [sheet.linepoints[-1]]
+
+
+@Drawing.api
+def click(sheet, x, y):
+    if sheet.mode == 'linedraw':
+        sheet.linepoints.append((x,y))
+
+    sheet.cursorBox = CharBox(None, x, y, 1, 1)
+
+@Drawing.api
+def release(sheet, x, y):
+    if sheet.mode == 'linedraw':
+        sheet.next_point(x, y)
+    else:
+        sheet.cursorBox.x2=x+2
+        sheet.cursorBox.y2=y+2
+        sheet.cursorBox.normalize()
+
+
+@Drawing.api
+def draw_line(self, objlist, x0, y0, x1, y1):
+    dx = abs(x1-x0)
+    sx = 1 if x0 < x1 else -1
+    dy = -abs(y1-y0)
+    sy = 1 if y0 < y1 else -1
+    error = dx + dy
+
+    objit = itertools.cycle(objlist)
+
+    while True:
+        row = next(objit)
+        self.paste_chars([row], CharBox(None, x0, y0, 1, 1))
+
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * error
+        if e2 >= dy:
+            if x0 == x1: break
+            error += dy
+            x0 += sx
+        if e2 <= dx:
+            if y0 == y1: break
+            error += dx
+            y0 += sy
+
+
+@Drawing.api
+def split_rows(sheet, rows):
+    vd.addUndo(setattr, sheet.source, 'rows', copy(sheet.source.rows))
+
+    for row in rows:
+        i = sheet.source.rows.index(row)
+        newrows = []
+        dx = 0
+        for ch in row.text:
+            newr = copy(row)
+            newr.text = ch
+            newr.x += dx
+            dx += dispwidth(ch)
+            newrows.append(newr)
+
+        sheet.source.rows[i:i+1] = newrows
+
+
 @Drawing.command('', 'box-cursor', 'draw a box to fill the inner edge of the cursor')
 def box_cursor(sheet):
     pass
 
 
+Drawing.init('mode', str)
+Drawing.init('linepoints', list)
 Drawing.init('cursorBox', lambda: CharBox(None, 0,0,1,1))
 Drawing.init('_displayedRows', dict)  # (x,y) -> list of rows
 Drawing.init('pendir', lambda: 'r')
@@ -795,13 +1028,16 @@ Drawing.init('disabled_tags', set)  # set of groupnames which should not be draw
 
 Drawing.init('mark', lambda: (0,0))
 Drawing.init('paste_mode', lambda: 'all')
+Drawing.init('cursorFrameIndex', lambda: 0)
+Drawing.init('autoplay_frames', list)
+Drawing.init('loop', lambda: True)
 Drawing.init('last_autosave', int)
 
 # (xoffset, yoffset) is absolute coordinate of upper left of viewport (0, 0)
 Drawing.init('yoffset', int)
 Drawing.init('xoffset', int)
 
-Drawing.class_options.disp_rstatus_fmt='{sheet.source.nRows} {sheet.rowtype}  {sheet.options.disp_selected_note}{sheet.source.nSelectedRows}'
+Drawing.class_options.disp_rstatus_fmt='{sheet.playDesc}{sheet.frameDesc} | {sheet.source.nRows} {sheet.rowtype}  {sheet.options.disp_selected_note}{sheet.source.nSelectedRows}'
 Drawing.class_options.quitguard='modified'
 Drawing.class_options.null_value=''
 DrawingSheet.class_options.null_value=''
@@ -827,6 +1063,14 @@ Drawing.addCommand('', 'pen-up', 'sheet.pendir="u"', '')
 Drawing.addCommand('', 'pen-right', 'sheet.pendir="r"', '')
 
 Drawing.addCommand('', 'align-x-selected', 'align_selected("x")')
+
+Drawing.addCommand('F', 'open-frames', 'vd.push(FramesSheet(sheet, "frames", source=sheet, rows=sheet.frames, cursorRowIndex=sheet.cursorFrameIndex))')
+Drawing.addCommand('[', 'prev-frame', 'sheet.cursorFrameIndex -= 1 if sheet.cursorFrameIndex > 0 else fail("first frame")')
+Drawing.addCommand(']', 'next-frame', 'sheet.cursorFrameIndex += 1 if sheet.cursorFrameIndex < sheet.nFrames-1 else fail("last frame")')
+Drawing.addCommand('g[', 'first-frame', 'sheet.cursorFrameIndex = 0')
+Drawing.addCommand('g]', 'last-frame', 'sheet.cursorFrameIndex = sheet.nFrames-1')
+Drawing.addCommand('z[', 'new-frame-before', 'sheet.new_between_frame(sheet.cursorFrameIndex-1, sheet.cursorFrameIndex)')
+Drawing.addCommand('z]', 'new-frame-after', 'sheet.new_between_frame(sheet.cursorFrameIndex, sheet.cursorFrameIndex+1); sheet.cursorFrameIndex += 1')
 
 Drawing.addCommand('gHome', 'slide-top-selected', 'source.slide_top(source.someSelectedRows, -1)', 'move selected items to top layer of drawing')
 Drawing.addCommand('gEnd', 'slide-bottom-selected', 'source.slide_top(source.someSelectedRows, 0)', 'move selected items to bottom layer of drawing')
@@ -858,6 +1102,8 @@ DrawingSheet.addCommand('gz(', 'degroup-selected-temp', 'degroup = sheet.degroup
 DrawingSheet.addCommand('gz)', 'regroup-selected', 'sheet.regroup(someSelectedRows)')
 
 Drawing.addCommand('zs', 'select-top', 'select_top(cursorBox)')
+Drawing.addCommand('gzs', 'select-all-this-frame', 'sheet.select(list(source.gatherBy(lambda r,f=currentFrame: r.frame == f.id)))')
+Drawing.addCommand('gzu', 'unselect-all-this-frame', 'sheet.unselect(list(source.gatherBy(lambda r,f=currentFrame: r.frame == f.id)))')
 Drawing.addCommand(',', 'select-equal-char', 'sheet.select(list(source.gatherBy(lambda r,ch=cursorChar: r.text==ch)))')
 Drawing.addCommand('|', 'select-tag', 'sheet.select_tag(input("select tag: ", type="group"))')
 Drawing.addCommand('\\', 'unselect-tag', 'sheet.unselect_tag(input("unselect tag: ", type="group"))')
@@ -879,6 +1125,9 @@ DrawingSheet.addCommand('`', 'open-drawing', 'vd.push(sheet.drawing)', 'push dra
 Drawing.addCommand('Ctrl+G', 'show-char', 'status(f"{sheet.cursorBox} <{cursorDesc}> {sheet.cursorCharName}")')
 DrawingSheet.addCommand('Enter', 'dive-group', 'cursorRow.rows or fail("no elements in group"); vd.push(DrawingSheet(source=sheet, rows=cursorRow.rows))')
 DrawingSheet.addCommand('gEnter', 'dive-selected', 'ret=sum(((r.rows or []) for r in selectedRows), []) or fail("no groups"); vd.push(DrawingSheet(source=sheet, rows=ret))')
+Drawing.addCommand('&', 'join-selected', 'join_rows(source.selectedRows)', 'join selected objects into one text object')
+Drawing.addCommand('/', 'split-cursor', 'split_rows(list(itercursor()))', 'split strings at cursor into multiple objects, one object per character')
+Drawing.addCommand('g/', 'split-selected', 'split_rows(source.selectedRows)', 'split selected strings into multiple objects, one object per character')
 
 Drawing.addCommand('gc', 'set-default-color-input', 'vd.default_color=input("set default color: ", value=vd.default_color)')
 Drawing.addCommand('c', 'set-default-color', 'vd.default_color=list(itercursor())[-1].color')
@@ -912,6 +1161,10 @@ Drawing.addCommand('zi', 'insert-col', 'for r in source.someSelectedRows: r.x +=
 Drawing.addCommand('zm', 'place-mark', 'sheet.mark=(cursorBox.x1, cursorBox.y1)')
 Drawing.addCommand('m', 'swap-mark', '(cursorBox.x1, cursorBox.y1), sheet.mark=sheet.mark, (cursorBox.x1, cursorBox.y1)')
 Drawing.addCommand('v', 'visibility', 'options.visibility = (options.visibility+1)%3')
+Drawing.addCommand('r', 'reset-time', 'sheet.autoplay_frames.extend([[0, f] for f in sheet.frames])')
+Drawing.addCommand('gzr', 'toggle-loop', 'sheet.loop = not sheet.loop; vd.status(f"loop={sheet.loop}")')
+
+Drawing.addCommand('zr', 'stop-animation', 'sheet.stop_animation()', 'stop animation')
 
 Drawing.addCommand(';', 'cycle-paste-mode', 'sheet.cycle_paste_mode()')
 Drawing.addCommand('g;', 'set-paste-base', 'sheet.options.ddw_add_baseframe = not sheet.options.ddw_add_baseframe')
@@ -935,6 +1188,12 @@ Drawing.bindkey('C', 'open-colors')
 Drawing.unbindkey('Ctrl+R')
 
 BaseSheet.addCommand(None, 'open-tutorial-darkdraw', 'vd.push(openSource(Drawing.tutorial_url))', 'Download and open DarkDraw tutorial as a DarkDraw sheet')
+Drawing.addCommand(None, 'generate-sauce', 'sheet.generate_sauce()', 'generate SAUCE metadata rows for current drawing')
+
+Drawing.addCommand('.', 'next-point', 'next_point(cursorBox.x1, cursorBox.y1)', '')
+Drawing.addCommand('w', 'line-drawing-mode', 'set_linedraw_mode()', '')
+Drawing.addCommand('BUTTON1_PRESSED', 'click-cursor', 'click(mouseX, mouseY)', 'start cursor box with left mouse button press')
+Drawing.addCommand('BUTTON1_RELEASED', 'end-cursor', 'release(mouseX, mouseY)', 'end cursor box with left mouse button release')
 
 vd.addMenuItems('''
     File > New drawing > new-drawing
@@ -946,7 +1205,15 @@ vd.addMenuItems('''
     DarkDraw > View > Colors sheet > open-colors
     DarkDraw > View > Unicode characters > open-unicode
     DarkDraw > View > Backing table > open-backing
+    DarkDraw > View > Frames sheet > open-frames
     DarkDraw > Cycle paste mode > cycle-paste-mode
+    DarkDraw > Animation > New frame > before > new-frame-before
+    DarkDraw > Animation > New frame > after > new-frame-after
+    DarkDraw > Animation > Go to frame > first > first-frame
+    DarkDraw > Animation > Go to frame > last > last-frame
+    DarkDraw > Animation > Go to frame > prev > prev-frame
+    DarkDraw > Animation > Go to frame > next > next-frame
+    DarkDraw > Animation > Start > reset-time
     DarkDraw > Color > Set default from cursor > set-default-cursor
     DarkDraw > Color > Set to input > set-color-input
     DarkDraw > Color > Cycle > cursor > down > cycle-cursor-next
